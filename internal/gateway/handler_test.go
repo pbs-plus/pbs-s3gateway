@@ -23,10 +23,10 @@ import (
 
 // testGateway sets up a full S3 gateway with a mock PBS backend.
 type testGateway struct {
-	pbs      *mockPBSServer
-	handler  *Handler
-	server   *httptest.Server
-	uploader *mockUploader
+	pbs       *mockPBSServer
+	handler   *Handler
+	server    *httptest.Server
+	uploader  *mockUploader
 	encryptor *crypto.Encryptor
 }
 
@@ -116,11 +116,11 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 		}
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		nsList := []map[string]interface{}{}
+		nsList := []map[string]any{}
 		for ns := range m.namespaces {
-			nsList = append(nsList, map[string]interface{}{"ns": ns})
+			nsList = append(nsList, map[string]any{"ns": ns})
 		}
-		json.NewEncoder(w).Encode( map[string]interface{}{"data": nsList})
+		json.NewEncoder(w).Encode(map[string]any{"data": nsList})
 	})
 
 	mux.HandleFunc("/api2/json/admin/datastore/teststore/groups", func(w http.ResponseWriter, r *http.Request) {
@@ -132,16 +132,16 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
-		groups := []map[string]interface{}{}
+		groups := []map[string]any{}
 		nsData, ok := m.snapshots[ns]
 		if !ok {
-			json.NewEncoder(w).Encode( map[string]interface{}{"data": groups})
+			json.NewEncoder(w).Encode(map[string]any{"data": groups})
 			return
 		}
 		for id, times := range nsData {
 			if len(times) > 0 {
 				for _, snap := range times {
-					groups = append(groups, map[string]interface{}{
+					groups = append(groups, map[string]any{
 						"backup-type": snap.backupType,
 						"backup-id":   id,
 						"count":       len(times),
@@ -150,7 +150,7 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 				}
 			}
 		}
-		json.NewEncoder(w).Encode( map[string]interface{}{"data": groups})
+		json.NewEncoder(w).Encode(map[string]any{"data": groups})
 	})
 
 	mux.HandleFunc("/api2/json/admin/datastore/teststore/snapshots", func(w http.ResponseWriter, r *http.Request) {
@@ -166,10 +166,10 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 			m.mu.Lock()
 			defer m.mu.Unlock()
 
-			snaps := []map[string]interface{}{}
+			snaps := []map[string]any{}
 			nsData, ok := m.snapshots[ns]
 			if !ok {
-				json.NewEncoder(w).Encode( map[string]interface{}{"data": snaps})
+				json.NewEncoder(w).Encode(map[string]any{"data": snaps})
 				return
 			}
 			for id, times := range nsData {
@@ -177,14 +177,14 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 					continue
 				}
 				for bt, snap := range times {
-					files := []map[string]interface{}{}
+					files := []map[string]any{}
 					for fname, data := range snap.files {
-						files = append(files, map[string]interface{}{
+						files = append(files, map[string]any{
 							"filename": fname,
 							"size":     len(data),
 						})
 					}
-					snaps = append(snaps, map[string]interface{}{
+					snaps = append(snaps, map[string]any{
 						"backup-type": snap.backupType,
 						"backup-id":   id,
 						"backup-time": bt,
@@ -192,7 +192,7 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 					})
 				}
 			}
-			json.NewEncoder(w).Encode( map[string]interface{}{"data": snaps})
+			json.NewEncoder(w).Encode(map[string]any{"data": snaps})
 
 		case http.MethodDelete:
 			backupID := r.URL.Query().Get("backup-id")
@@ -211,7 +211,7 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 					}
 				}
 			}
-			json.NewEncoder(w).Encode( map[string]interface{}{"data": nil})
+			json.NewEncoder(w).Encode(map[string]any{"data": nil})
 
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -655,4 +655,3 @@ func TestSplitPath(t *testing.T) {
 		}
 	}
 }
-

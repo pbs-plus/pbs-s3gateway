@@ -27,7 +27,7 @@ type BlobUploader interface {
 
 // bufPool reuses byte slices for reading request/response bodies.
 var bufPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		buf := make([]byte, 0, 32*1024)
 		return &buf
 	},
@@ -38,7 +38,7 @@ func putBuf(b *[]byte) { *b = (*b)[:0]; bufPool.Put(b) }
 
 // etagBufPool reuses [64]byte buffers for hex ETag strings.
 var etagBufPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		b := make([]byte, 0, 66) // "..." + 64 hex chars
 		return &b
 	},

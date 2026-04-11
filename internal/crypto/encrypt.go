@@ -13,8 +13,8 @@ import (
 // Encryptor provides AES-256-GCM encryption/decryption.
 // A nil block means passthrough (no encryption).
 type Encryptor struct {
-	block cipher.Block
-	gcm   cipher.AEAD
+	block     cipher.Block
+	gcm       cipher.AEAD
 	noncePool sync.Pool
 }
 
@@ -47,7 +47,7 @@ func NewEncryptor(hexKey string) (*Encryptor, error) {
 		block: block,
 		gcm:   gcm,
 		noncePool: sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				b := make([]byte, gcm.NonceSize())
 				return &b
 			},

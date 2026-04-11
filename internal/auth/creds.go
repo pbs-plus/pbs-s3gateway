@@ -75,13 +75,13 @@ func (s *Store) TokenFromRequest(r *http.Request) (string, bool) {
 
 func (s *Store) extractSigV4(header string) (string, bool) {
 	// AWS4-HMAC-SHA256 Credential=ACCESSKEYID/20240115/us-east-1/s3/aws4_request, ...
-	for _, part := range strings.Split(header, " ") {
-		if strings.HasPrefix(part, "Credential=") {
-			cred := strings.TrimPrefix(part, "Credential=")
+	for part := range strings.SplitSeq(header, " ") {
+		if after, ok := strings.CutPrefix(part, "Credential="); ok {
+			cred := after
 			cred = strings.TrimSuffix(cred, ",")
 			// Format: ACCESSKEYID/date/region/s3/aws4_request
-			if idx := strings.Index(cred, "/"); idx >= 0 {
-				return s.lookup(cred[:idx])
+			if before, _, ok := strings.Cut(cred, "/"); ok {
+				return s.lookup(before)
 			}
 		}
 	}

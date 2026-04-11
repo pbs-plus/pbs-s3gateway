@@ -13,12 +13,12 @@ import (
 
 // mockPBSServer simulates PBS REST management API with namespace support.
 type mockPBSServer struct {
-	server    *httptest.Server
-	snapshots map[string]map[string]map[int64]mockSnapshot // ns → backupID → backupTime → snapshot
+	server     *httptest.Server
+	snapshots  map[string]map[string]map[int64]mockSnapshot // ns → backupID → backupTime → snapshot
 	namespaces map[string]bool
-	mu        sync.Mutex
-	token     string
-	store     string
+	mu         sync.Mutex
+	token      string
+	store      string
 }
 
 type mockSnapshot struct {
@@ -48,11 +48,11 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
-		nsList := []map[string]interface{}{}
+		nsList := []map[string]any{}
 		for ns := range m.namespaces {
-			nsList = append(nsList, map[string]interface{}{"ns": ns})
+			nsList = append(nsList, map[string]any{"ns": ns})
 		}
-		writeJSON(w, map[string]interface{}{"data": nsList})
+		writeJSON(w, map[string]any{"data": nsList})
 	})
 
 	// List groups
@@ -66,16 +66,16 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
-		groups := []map[string]interface{}{}
+		groups := []map[string]any{}
 		nsData, ok := m.snapshots[ns]
 		if !ok {
-			writeJSON(w, map[string]interface{}{"data": groups})
+			writeJSON(w, map[string]any{"data": groups})
 			return
 		}
 		for id, times := range nsData {
 			if len(times) > 0 {
 				for _, snap := range times {
-					groups = append(groups, map[string]interface{}{
+					groups = append(groups, map[string]any{
 						"backup-type": snap.backupType,
 						"backup-id":   id,
 						"count":       len(times),
@@ -84,7 +84,7 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 				}
 			}
 		}
-		writeJSON(w, map[string]interface{}{"data": groups})
+		writeJSON(w, map[string]any{"data": groups})
 	})
 
 	// List/Delete snapshots
@@ -103,10 +103,10 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 			m.mu.Lock()
 			defer m.mu.Unlock()
 
-			snaps := []map[string]interface{}{}
+			snaps := []map[string]any{}
 			nsData, ok := m.snapshots[ns]
 			if !ok {
-				writeJSON(w, map[string]interface{}{"data": snaps})
+				writeJSON(w, map[string]any{"data": snaps})
 				return
 			}
 			for id, times := range nsData {
@@ -114,14 +114,14 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 					continue
 				}
 				for bt, snap := range times {
-					files := []map[string]interface{}{}
+					files := []map[string]any{}
 					for fname, data := range snap.files {
-						files = append(files, map[string]interface{}{
+						files = append(files, map[string]any{
 							"filename": fname,
 							"size":     len(data),
 						})
 					}
-					snaps = append(snaps, map[string]interface{}{
+					snaps = append(snaps, map[string]any{
 						"backup-type": snap.backupType,
 						"backup-id":   id,
 						"backup-time": bt,
@@ -129,7 +129,7 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 					})
 				}
 			}
-			writeJSON(w, map[string]interface{}{"data": snaps})
+			writeJSON(w, map[string]any{"data": snaps})
 
 		case http.MethodDelete:
 			backupID := r.URL.Query().Get("backup-id")
@@ -149,7 +149,7 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 					}
 				}
 			}
-			writeJSON(w, map[string]interface{}{"data": nil})
+			writeJSON(w, map[string]any{"data": nil})
 
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -371,7 +371,7 @@ func TestPBSAuthFailure(t *testing.T) {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, v map[string]interface{}) {
+func writeJSON(w http.ResponseWriter, v map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
 }
