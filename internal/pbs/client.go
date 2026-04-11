@@ -13,6 +13,7 @@ import (
 // Client implements PBS REST management API operations.
 type Client struct {
 	baseURL    string
+	baseHost   string
 	authHeader string // default auth (static token)
 	client     *http.Client
 }
@@ -25,6 +26,7 @@ func NewClient(config Config) *Client {
 	}
 	return &Client{
 		baseURL:    config.BaseURL + "/api2/json/admin/datastore/" + config.Datastore,
+		baseHost:   config.BaseURL,
 		authHeader: authHeader,
 		client:     &http.Client{},
 	}
@@ -195,5 +197,25 @@ func (c *Client) DeleteSnapshot(ctx context.Context, ns, backupID string, backup
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("delete snapshot: HTTP %d: %s", resp.StatusCode, body)
 	}
+	return nil
+}
+
+// HealthCheck verifies PBS is reachable. With a static token it calls
+// ListNamespaces; in passthrough mode (no static token) it does an
+// unauthenticated GET to the PBS API root to confirm TCP/TLS connectivity.
+func (c *Client) HealthCheck(ctx context.Context) error {
+	if c.authHeader != "" {
+		_, err := c.ListNamespaces(ctx)
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseHost+"/api2/json/version", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
 	return nil
 }

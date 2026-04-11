@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/pbs-plus/pbs-s3gateway/internal/auth"
 	"github.com/pbs-plus/pbs-s3gateway/internal/crypto"
@@ -86,7 +88,13 @@ func main() {
 	handler := gateway.NewHandler(km, client, uploader, enc, creds)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if err := client.HealthCheck(ctx); err != nil {
+			http.Error(w, "PBS unreachable", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.Handle("/", handler)
