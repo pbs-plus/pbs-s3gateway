@@ -1,0 +1,70 @@
+package main
+
+import (
+	"flag"
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/pbs-plus/pbs-s3gateway/internal/crypto"
+	"github.com/pbs-plus/pbs-s3gateway/internal/gateway"
+	"github.com/pbs-plus/pbs-s3gateway/internal/keymapper"
+	"github.com/pbs-plus/pbs-s3gateway/internal/pbs"
+)
+
+func main() {
+	listenAddr := flag.String("listen", ":8080", "listen address")
+	pbsURL := flag.String("pbs-url", "", "PBS API base URL (e.g. https://pbs:8007)")
+	pbsDatastore := flag.String("pbs-datastore", "", "PBS datastore name")
+	pbsToken := flag.String("pbs-token", "", "PBS API token (TOKENID:SECRET)")
+	insecureTLS := flag.Bool("insecure-tls", false, "skip TLS certificate verification")
+	encryptKey := flag.String("encryption-key", "", "AES-256-GCM encryption key (hex-encoded, 64 chars)")
+	flag.Parse()
+
+	if *pbsURL == "" {
+		*pbsURL = os.Getenv("PBS_URL")
+	}
+	if *pbsDatastore == "" {
+		*pbsDatastore = os.Getenv("PBS_DATASTORE")
+	}
+	if *pbsToken == "" {
+		*pbsToken = os.Getenv("PBS_TOKEN")
+	}
+	if *encryptKey == "" {
+		*encryptKey = os.Getenv("ENCRYPTION_KEY")
+	}
+
+	if *pbsURL == "" || *pbsDatastore == "" || *pbsToken == "" {
+		log.Fatal("PBS URL, datastore, and token are required (via flags or PBS_URL, PBS_DATASTORE, PBS_TOKEN env vars)")
+	}
+
+	config := pbs.Config{
+		BaseURL:   *pbsURL,
+		Datastore: *pbsDatastore,
+		AuthToken: *pbsToken,
+	}
+
+	enc, err := crypto.NewEncryptor(*encryptKey)
+	if err != nil {
+		log.Fatalf("invalid encryption key: %v", err)
+	}
+
+	km := keymapper.NewKeyMapper()
+	client := pbs.NewClient(config)
+	uploader := pbs.NewUploader(config, *insecureTLS)
+
+	handler := gateway.NewHandler(km, client, uploader, enc)
+
+	mux := http.NewServeMux()
+	mux.Handle("/", handler)
+
+	if enc.Enabled() {
+		log.Printf("Encryption: AES-256-GCM enabled")
+	} else {
+		log.Printf("Encryption: disabled (passthrough)")
+	}
+	log.Printf("S3 gateway listening on %s -> PBS %s/%s", *listenAddr, *pbsURL, *pbsDatastore)
+	if err := http.ListenAndServe(*listenAddr, mux); err != nil {
+		log.Fatal(err)
+	}
+}
