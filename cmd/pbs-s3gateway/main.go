@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +13,12 @@ import (
 	"github.com/pbs-plus/pbs-s3gateway/internal/pbs"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	listenAddr := flag.String("listen", ":8080", "listen address")
 	pbsURL := flag.String("pbs-url", "", "PBS API base URL (e.g. https://pbs:8007)")
@@ -19,7 +26,13 @@ func main() {
 	pbsToken := flag.String("pbs-token", "", "PBS API token (TOKENID:SECRET)")
 	insecureTLS := flag.Bool("insecure-tls", false, "skip TLS certificate verification")
 	encryptKey := flag.String("encryption-key", "", "AES-256-GCM encryption key (hex-encoded, 64 chars)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("pbs-s3gateway %s (commit: %s, built: %s)\n", version, commit, date)
+		os.Exit(0)
+	}
 
 	if *pbsURL == "" {
 		*pbsURL = os.Getenv("PBS_URL")
