@@ -1,0 +1,15 @@
+# Example: mariadb-operator Backup CRD targeting the S3 gateway
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Backup
+metadata:
+  name: mariadb-backup
+spec:
+  mariaDbRef:
+    name: mariadb
+  s3:
+    bucket: team-a
+    prefix: mariadb/
+    endpoint: http://pbs-s3gateway:80
+    # Use dummy credentials — auth is handled by the gateway's PBS token
+    accessKeyId: "access"
+    secretAccessKey: "secret"

@@ -1,0 +1,14 @@
+services:
+  s3gateway:
+    image: ghcr.io/pbs-plus/pbs-s3gateway:latest
+    ports:
+      - "8080:8080"
+    environment:
+      PBS_URL: https://pbs.example.com:8007
+      PBS_DATASTORE: backup-store
+      PBS_TOKEN: api-token-id:secret
+      ENCRYPTION_KEY: ""
+      # LISTEN: ":8080"
+    # volumes:
+    #   - ./certs:/certs:ro
+    restart: unless-stopped
