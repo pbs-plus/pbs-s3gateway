@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/pbs-plus/pbs-s3gateway/internal/auth"
 	"github.com/pbs-plus/pbs-s3gateway/internal/crypto"
 	"github.com/pbs-plus/pbs-s3gateway/internal/gateway"
 	"github.com/pbs-plus/pbs-s3gateway/internal/keymapper"
@@ -26,6 +27,7 @@ func main() {
 	pbsToken := flag.String("pbs-token", "", "PBS API token (TOKENID:SECRET)")
 	insecureTLS := flag.Bool("insecure-tls", false, "skip TLS certificate verification")
 	encryptKey := flag.String("encryption-key", "", "AES-256-GCM encryption key (hex-encoded, 64 chars)")
+	credsFile := flag.String("credentials", "", "path to S3 credentials file (JSON: accessKeyId → secretAccessKey)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -46,9 +48,15 @@ func main() {
 	if *encryptKey == "" {
 		*encryptKey = os.Getenv("ENCRYPTION_KEY")
 	}
+	if *credsFile == "" {
+		*credsFile = os.Getenv("CREDENTIALS_FILE")
+	}
 
-	if *pbsURL == "" || *pbsDatastore == "" || *pbsToken == "" {
-		log.Fatal("PBS URL, datastore, and token are required (via flags or PBS_URL, PBS_DATASTORE, PBS_TOKEN env vars)")
+	if *pbsURL == "" || *pbsDatastore == "" {
+		log.Fatal("PBS URL and datastore are required (via flags or PBS_URL, PBS_DATASTORE env vars)")
+	}
+	if *pbsToken == "" && *credsFile == "" {
+		log.Fatal("Either --pbs-token or --credentials is required")
 	}
 
 	config := pbs.Config{
@@ -62,11 +70,20 @@ func main() {
 		log.Fatalf("invalid encryption key: %v", err)
 	}
 
+	var creds *auth.Store
+	if *credsFile != "" {
+		creds, err = auth.LoadStore(*credsFile)
+		if err != nil {
+			log.Fatalf("load credentials: %v", err)
+		}
+		log.Printf("Credentials: loaded from %s", *credsFile)
+	}
+
 	km := keymapper.NewKeyMapper()
 	client := pbs.NewClient(config)
 	uploader := pbs.NewUploader(config, *insecureTLS)
 
-	handler := gateway.NewHandler(km, client, uploader, enc)
+	handler := gateway.NewHandler(km, client, uploader, enc, creds)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", handler)
