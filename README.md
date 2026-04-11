@@ -110,16 +110,73 @@ pbs-s3gateway --pbs-token "root@pam!s3gateway:secret"
 
 **Credential passthrough** — S3 Access Key ID and Secret are mapped to PBS credentials. Each S3 client authenticates with its own credentials, and the gateway translates them into PBS API tokens.
 
-Create a credentials file (`credentials.json`):
+Supported S3 auth methods: AWS Signature V4, AWS Signature V2, HTTP Basic Auth, query string auth.
+
+#### Creating PBS API Tokens
+
+The gateway needs PBS API tokens with access to the target datastore. You can create tokens via the PBS web UI or API.
+
+**Option A: API token under a user (recommended)**
+
+1. In the PBS web UI, go to **Configuration → Access Control → API Tokens**
+2. Click **Add**
+3. Set **User** to the token owner (e.g. `root@pam`)
+4. Set **Token ID** (e.g. `s3gateway`) — the full token ID becomes `user@realm!tokenid` (e.g. `root@pam!s3gateway`)
+5. Uncheck **Privilege Separation** so the token inherits the user's permissions
+6. Save the generated **Secret** — it looks like `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
+
+Then grant the user permissions on the datastore:
+
+1. Go to **Configuration → Access Control → Permissions**
+2. Add a permission:
+   - **Path**: `/datastore/<datastore-name>`
+   - **User**: `root@pam` (or your chosen user)
+   - **Role**: `PVEDatastoreUser`
+
+`PVEDatastoreUser` includes `Datastore.Audit` and `Datastore.ReadDatastore` and `Datastore.Backup`, which covers listing, downloading, and uploading. To also allow deletes, use `PVEDatastoreAdmin` or assign `Datastore.Modify` and `Datastore.Prune` additionally.
+
+**Option B: Custom role with minimum permissions**
+
+For finer-grained control, create a dedicated user and role with only the required privileges:
+
+1. Go to **Configuration → Access Control → Roles**, click **Add**:
+   - **Role ID**: `S3Gateway`
+   - **Privileges**: `Datastore.Audit`, `Datastore.Modify`, `Datastore.Backup`, `Datastore.Prune`
+
+2. Create a user under **Configuration → Access Control → User Management**:
+   - **User ID**: `s3gateway@pbs`
+   - Set a password
+
+3. Grant the role to the user on the datastore under **Permissions**:
+   - **Path**: `/datastore/<datastore-name>`
+   - **User**: `s3gateway@pbs`
+   - **Role**: `S3Gateway`
+
+4. Create an API token for that user under **API Tokens**:
+   - **User**: `s3gateway@pbs`
+   - **Token ID**: `s3` (full ID becomes `s3gateway@pbs!s3`)
+   - **Privilege Separation**: unchecked
+
+#### Setting up the credentials file
+
+Create `credentials.json` mapping each PBS token ID to its secret:
+
 ```json
 {
   "root@pam!s3gateway": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 }
 ```
 
-The mapping is: S3 Access Key ID = PBS token ID, S3 Secret Access Key = PBS token secret. The gateway forms `ACCESSKEYID:SECRETACCESSKEY` as the PBS API token.
+The mapping is: S3 Access Key ID = PBS token ID, S3 Secret Access Key = PBS token secret. The gateway forms `TOKENID:SECRET` as the PBS API token.
 
-Supported S3 auth methods: AWS Signature V4, AWS Signature V2, HTTP Basic Auth, query string auth.
+For multiple clients, add one entry per token:
+
+```json
+{
+  "root@pam!team-a": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "root@pam!team-b": "11111111-2222-3333-4444-555555555555"
+}
+```
 
 ### Example
 
