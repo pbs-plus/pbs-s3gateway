@@ -6,8 +6,13 @@ type: Opaque
 stringData:
   pbs-url: "https://pbs.example.com:8007"
   pbs-datastore: "backup-store"
-  pbs-token: "api-token-id:secret"
+  pbs-token: ""  # optional when using credentials file
   encryption-key: ""
+  # Credentials file content (JSON: accessKeyId → secretAccessKey)
+  credentials: |
+    {
+      "root@pam!s3gateway": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -51,6 +56,10 @@ spec:
                 secretKeyRef:
                   name: pbs-s3gateway
                   key: encryption-key
+          args: ["--credentials", "/etc/credentials/credentials.json"]
+          volumeMounts:
+            - name: credentials
+              mountPath: /etc/credentials
           resources:
             requests:
               cpu: 50m
@@ -68,6 +77,13 @@ spec:
               path: /
               port: 8080
             periodSeconds: 5
+      volumes:
+        - name: credentials
+          secret:
+            secretName: pbs-s3gateway
+            items:
+              - key: credentials
+                path: credentials.json
 ---
 apiVersion: v1
 kind: Service

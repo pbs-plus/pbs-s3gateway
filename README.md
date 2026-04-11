@@ -94,20 +94,42 @@ pbs-s3gateway [flags]
 | `--listen` | `LISTEN` | Listen address (default `:8080`) |
 | `--pbs-url` | `PBS_URL` | PBS API base URL (e.g. `https://pbs:8007`) |
 | `--pbs-datastore` | `PBS_DATASTORE` | PBS datastore name |
-| `--pbs-token` | `PBS_TOKEN` | PBS API token (`TOKENID:SECRET`) |
+| `--pbs-token` | `PBS_TOKEN` | PBS API token (`TOKENID:SECRET`). Optional when using `--credentials`. |
+| `--credentials` | `CREDENTIALS_FILE` | Path to S3 credentials file (JSON mapping accessKeyId → secretAccessKey) |
 | `--encryption-key` | `ENCRYPTION_KEY` | AES-256 key, hex-encoded (64 chars). Omit for passthrough. |
 | `--insecure-tls` | | Skip TLS certificate verification |
+
+### Authentication
+
+The gateway supports two auth modes:
+
+**Static token** — a single PBS token used for all requests:
+```bash
+pbs-s3gateway --pbs-token "root@pam!s3gateway:secret"
+```
+
+**Credential passthrough** — S3 Access Key ID and Secret are mapped to PBS credentials. Each S3 client authenticates with its own credentials, and the gateway translates them into PBS API tokens.
+
+Create a credentials file (`credentials.json`):
+```json
+{
+  "root@pam!s3gateway": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+}
+```
+
+The mapping is: S3 Access Key ID = PBS token ID, S3 Secret Access Key = PBS token secret. The gateway forms `ACCESSKEYID:SECRETACCESSKEY` as the PBS API token.
+
+Supported S3 auth methods: AWS Signature V4, AWS Signature V2, HTTP Basic Auth, query string auth.
 
 ### Example
 
 ```bash
-# Start the gateway
+# Start the gateway with credentials passthrough
 pbs-s3gateway \
   --listen :8080 \
   --pbs-url https://pbs.example.com:8007 \
   --pbs-datastore backup-store \
-  --pbs-token "api-token-id:secret" \
-  --encryption-key 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  --credentials credentials.json
 
 # Use with any S3 client
 aws --endpoint-url http://localhost:8080 s3 cp backup.sql s3://team-a/backups/backup.sql
@@ -115,7 +137,7 @@ aws --endpoint-url http://localhost:8080 s3 cp backup.sql s3://team-a/backups/ba
 
 ### With mariadb-operator
 
-Configure the backup CRD to point at the gateway:
+Configure the backup CRD with real PBS credentials as S3 access key and secret:
 
 ```yaml
 apiVersion: k8s.mariadb.com/v1alpha1
@@ -129,8 +151,8 @@ spec:
     bucket: team-a
     prefix: mariadb/
     endpoint: http://pbs-s3gateway:8080
-    # accessKeyId and secretAccessKey can be dummy values
-    # since auth is handled by the PBS token on the gateway side
+    accessKeyId: "root@pam!s3gateway"
+    secretAccessKey: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
 ## Project Structure
@@ -138,9 +160,10 @@ spec:
 ```
 cmd/pbs-s3gateway/        Entry point
 internal/
+  auth/                   S3 credential extraction and PBS token mapping
   crypto/                 AES-256-GCM encryption (sync.Pool for nonces, pre-computed cipher)
   gateway/                S3 HTTP handler, routing, namespace mapping
-  keymapper/              S3 key ↔ PBS backup-id encoding (cached via sync.Map)
+  keymapper/              S3 key <-> PBS backup-id encoding (cached via sync.Map)
   pbs/                    PBS REST client + HTTP/2 upload protocol
   s3/                     S3 XML response types and serialization
 ```

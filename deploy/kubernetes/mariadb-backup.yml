@@ -1,4 +1,15 @@
 # Example: mariadb-operator Backup CRD targeting the S3 gateway
+# The accessKeyId and secretAccessKey are PBS credentials that the
+# gateway translates into PBS API tokens via the credentials file.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mariadb-s3-creds
+type: Opaque
+stringData:
+  accessKeyId: "root@pam!s3gateway"
+  secretAccessKey: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: Backup
 metadata:
@@ -10,6 +21,9 @@ spec:
     bucket: team-a
     prefix: mariadb/
     endpoint: http://pbs-s3gateway:80
-    # Use dummy credentials — auth is handled by the gateway's PBS token
-    accessKeyId: "access"
-    secretAccessKey: "secret"
+    accessKeyIdSecret:
+      name: mariadb-s3-creds
+      key: accessKeyId
+    secretAccessKeySecret:
+      name: mariadb-s3-creds
+      key: secretAccessKey
