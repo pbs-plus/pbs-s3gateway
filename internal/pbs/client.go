@@ -12,18 +12,36 @@ import (
 
 // Client implements PBS REST management API operations.
 type Client struct {
-	baseURL     string
-	authHeader  string
-	client      *http.Client
+	baseURL    string
+	authHeader string // default auth (static token)
+	client     *http.Client
 }
 
 // NewClient creates a new PBS REST client.
 func NewClient(config Config) *Client {
+	authHeader := ""
+	if config.AuthToken != "" {
+		authHeader = "PBSAPIToken " + config.AuthToken
+	}
 	return &Client{
 		baseURL:    config.BaseURL + "/api2/json/admin/datastore/" + config.Datastore,
-		authHeader: "PBSAPIToken " + config.AuthToken,
+		authHeader: authHeader,
 		client:     &http.Client{},
 	}
+}
+
+type authCtxKey struct{}
+
+// WithAuthToken returns a context that overrides the PBS auth token for this request.
+func WithAuthToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, authCtxKey{}, token)
+}
+
+func (c *Client) authForRequest(ctx context.Context) string {
+	if v, ok := ctx.Value(authCtxKey{}).(string); ok && v != "" {
+		return "PBSAPIToken " + v
+	}
+	return c.authHeader
 }
 
 func (c *Client) doRequest(ctx context.Context, method, path string, params url.Values) (*http.Response, error) {
@@ -36,7 +54,9 @@ func (c *Client) doRequest(ctx context.Context, method, path string, params url.
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", c.authHeader)
+	if auth := c.authForRequest(ctx); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
 	return c.client.Do(req)
 }
 
@@ -161,7 +181,9 @@ func (c *Client) DeleteSnapshot(ctx context.Context, ns, backupID string, backup
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", c.authHeader)
+	if auth := c.authForRequest(ctx); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {

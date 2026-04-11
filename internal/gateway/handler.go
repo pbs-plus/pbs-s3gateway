@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pbs-plus/pbs-s3gateway/internal/auth"
 	"github.com/pbs-plus/pbs-s3gateway/internal/crypto"
 	"github.com/pbs-plus/pbs-s3gateway/internal/keymapper"
 	"github.com/pbs-plus/pbs-s3gateway/internal/pbs"
@@ -63,16 +64,29 @@ type Handler struct {
 	client    *pbs.Client
 	uploader  BlobUploader
 	encryptor *crypto.Encryptor
+	creds     *auth.Store
 }
 
 // NewHandler creates a new S3 handler.
-func NewHandler(km *keymapper.KeyMapper, client *pbs.Client, uploader BlobUploader, enc *crypto.Encryptor) *Handler {
+func NewHandler(km *keymapper.KeyMapper, client *pbs.Client, uploader BlobUploader, enc *crypto.Encryptor, creds *auth.Store) *Handler {
 	return &Handler{
 		keyMapper: km,
 		client:    client,
 		uploader:  uploader,
 		encryptor: enc,
+		creds:     creds,
 	}
+}
+
+// authContext extracts S3 credentials from the request and returns
+// a context with the PBS token injected. Falls back to the static token.
+func (h *Handler) authContext(r *http.Request) context.Context {
+	if h.creds != nil {
+		if token, ok := h.creds.TokenFromRequest(r); ok {
+			return pbs.WithAuthToken(r.Context(), token)
+		}
+	}
+	return r.Context()
 }
 
 // ServeHTTP routes S3 requests to the appropriate handler.
@@ -113,7 +127,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listBuckets(w http.ResponseWriter, r *http.Request) {
-	namespaces, err := h.client.ListNamespaces(r.Context())
+	ctx := h.authContext(r)
+	namespaces, err := h.client.ListNamespaces(ctx)
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), "", http.StatusInternalServerError)
 		return
@@ -149,7 +164,7 @@ func (h *Handler) putObject(w http.ResponseWriter, r *http.Request, bucket, key 
 	mapping := h.keyMapper.S3ToPBS(key)
 	mapping.BackupTime = time.Now().Unix()
 
-	backupTime, err := h.uploader.UploadBlob(r.Context(), bucket, mapping.BackupID, encryptedData)
+	backupTime, err := h.uploader.UploadBlob(h.authContext(r), bucket, mapping.BackupID, encryptedData)
 	if err != nil {
 		log.Printf("upload %s/%s: %v", bucket, key, err)
 		writeS3Error(w, "InternalError", "upload failed", key, http.StatusInternalServerError)
@@ -162,9 +177,10 @@ func (h *Handler) putObject(w http.ResponseWriter, r *http.Request, bucket, key 
 }
 
 func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	ctx := h.authContext(r)
 	mapping := h.keyMapper.S3ToPBS(key)
 
-	snaps, err := h.client.ListSnapshots(r.Context(), bucket, mapping.BackupID)
+	snaps, err := h.client.ListSnapshots(ctx, bucket, mapping.BackupID)
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
@@ -176,7 +192,7 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 
 	snap := snaps[len(snaps)-1]
 
-	data, err := h.client.Download(r.Context(), bucket, mapping.BackupID, snap.BackupTime, mapping.Filename)
+	data, err := h.client.Download(ctx, bucket, mapping.BackupID, snap.BackupTime, mapping.Filename)
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
@@ -196,9 +212,10 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 }
 
 func (h *Handler) headObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	ctx := h.authContext(r)
 	mapping := h.keyMapper.S3ToPBS(key)
 
-	snaps, err := h.client.ListSnapshots(r.Context(), bucket, mapping.BackupID)
+	snaps, err := h.client.ListSnapshots(ctx, bucket, mapping.BackupID)
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
@@ -215,9 +232,10 @@ func (h *Handler) headObject(w http.ResponseWriter, r *http.Request, bucket, key
 }
 
 func (h *Handler) deleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	ctx := h.authContext(r)
 	mapping := h.keyMapper.S3ToPBS(key)
 
-	snaps, err := h.client.ListSnapshots(r.Context(), bucket, mapping.BackupID)
+	snaps, err := h.client.ListSnapshots(ctx, bucket, mapping.BackupID)
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
@@ -228,7 +246,7 @@ func (h *Handler) deleteObject(w http.ResponseWriter, r *http.Request, bucket, k
 	}
 
 	snap := snaps[len(snaps)-1]
-	if err := h.client.DeleteSnapshot(r.Context(), bucket, mapping.BackupID, snap.BackupTime); err != nil {
+	if err := h.client.DeleteSnapshot(ctx, bucket, mapping.BackupID, snap.BackupTime); err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
 	}
@@ -237,10 +255,11 @@ func (h *Handler) deleteObject(w http.ResponseWriter, r *http.Request, bucket, k
 }
 
 func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket string) {
+	ctx := h.authContext(r)
 	prefix := r.URL.Query().Get("prefix")
 	marker := r.URL.Query().Get("marker")
 
-	groups, err := h.client.ListGroups(r.Context(), bucket)
+	groups, err := h.client.ListGroups(ctx, bucket)
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), bucket, http.StatusInternalServerError)
 		return
@@ -259,7 +278,7 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 			continue
 		}
 
-		snaps, err := h.client.ListSnapshots(r.Context(), bucket, group.BackupID)
+		snaps, err := h.client.ListSnapshots(ctx, bucket, group.BackupID)
 		if err != nil || len(snaps) == 0 {
 			continue
 		}
@@ -278,7 +297,7 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 	}
 
 	// Include objects from sub-namespaces
-	namespaces, err := h.client.ListNamespaces(r.Context())
+	namespaces, err := h.client.ListNamespaces(ctx)
 	if err == nil {
 		for _, ns := range namespaces {
 			if ns.NS == bucket {
@@ -296,7 +315,7 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 				continue
 			}
 
-			subGroups, err := h.client.ListGroups(r.Context(), ns.NS)
+			subGroups, err := h.client.ListGroups(ctx, ns.NS)
 			if err != nil {
 				continue
 			}
@@ -313,7 +332,7 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 					continue
 				}
 
-				snaps, err := h.client.ListSnapshots(r.Context(), ns.NS, group.BackupID)
+				snaps, err := h.client.ListSnapshots(ctx, ns.NS, group.BackupID)
 				if err != nil || len(snaps) == 0 {
 					continue
 				}
