@@ -52,7 +52,7 @@ func newTestGatewayWithEncryption(t *testing.T, hexKey string) *testGateway {
 		t.Fatal(err)
 	}
 
-	handler := NewHandler(km, client, uploader, enc)
+	handler := NewHandler(km, client, uploader, enc, nil)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", handler)
