@@ -69,12 +69,12 @@ spec:
               memory: 256Mi
           livenessProbe:
             httpGet:
-              path: /
+              path: /health
               port: 8080
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /
+              path: /health
               port: 8080
             periodSeconds: 5
       volumes:
