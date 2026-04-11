@@ -56,7 +56,7 @@ func main() {
 		log.Fatal("PBS URL and datastore are required (via flags or PBS_URL, PBS_DATASTORE env vars)")
 	}
 	if *pbsToken == "" && *credsFile == "" {
-		log.Fatal("Either --pbs-token or --credentials is required")
+		log.Println("Warning: no --pbs-token or --credentials configured; requests must carry S3 auth that maps to a PBS token")
 	}
 
 	config := pbs.Config{
