@@ -250,6 +250,8 @@ func (u *Uploader) UploadArchive(ctx context.Context, ns, backupID, filename str
 		return 0, fmt.Errorf("upload archive: %w", err)
 	}
 
+	log.Printf("upload archive %s: index size=%d", archiveName, result.Size)
+
 	// Create and upload metadata file with original size for accurate S3 listing
 	meta := FileMetadata{
 		OriginalSize:  originalSize,
@@ -262,9 +264,11 @@ func (u *Uploader) UploadArchive(ctx context.Context, ns, backupID, filename str
 		log.Printf("upload metadata %s.s3meta: %v", archiveName, err)
 	}
 
-	if _, err := session.Finish(ctx); err != nil {
+	info, err := session.Finish(ctx)
+	if err != nil {
 		return 0, fmt.Errorf("finish: %w", err)
 	}
+	log.Printf("upload finished: backup-time=%d, files=%d", info.BackupTime, len(info.Files))
 
 	return actualTime, nil
 }
