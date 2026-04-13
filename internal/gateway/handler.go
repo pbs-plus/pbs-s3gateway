@@ -81,10 +81,8 @@ func NewHandler(km *keymapper.KeyMapper, client *pbs.Client, uploader BlobUpload
 // authContext extracts S3 credentials from the request and returns
 // a context with the PBS token injected. Falls back to the static token.
 func (h *Handler) authContext(r *http.Request) context.Context {
-	if h.creds != nil {
-		if token, ok := h.creds.TokenFromRequest(r); ok {
-			return pbs.WithAuthToken(r.Context(), token)
-		}
+	if token, ok := h.creds.TokenFromRequest(r); ok {
+		return pbs.WithAuthToken(r.Context(), token)
 	}
 	return r.Context()
 }
@@ -164,7 +162,13 @@ func (h *Handler) putObject(w http.ResponseWriter, r *http.Request, bucket, key 
 	mapping := h.keyMapper.S3ToPBS(key)
 	mapping.BackupTime = time.Now().Unix()
 
-	backupTime, err := h.uploader.UploadBlob(h.authContext(r), bucket, mapping.BackupID, encryptedData)
+	// Build full namespace path: bucket + sub-namespace from key path
+	fullNamespace := bucket
+	if mapping.Namespace != "" {
+		fullNamespace = bucket + "/" + mapping.Namespace
+	}
+
+	backupTime, err := h.uploader.UploadBlob(h.authContext(r), fullNamespace, mapping.BackupID, encryptedData)
 	if err != nil {
 		log.Printf("upload %s/%s: %v", bucket, key, err)
 		writeS3Error(w, "InternalError", "upload failed", key, http.StatusInternalServerError)
@@ -180,7 +184,13 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 	ctx := h.authContext(r)
 	mapping := h.keyMapper.S3ToPBS(key)
 
-	snaps, err := h.client.ListSnapshots(ctx, bucket, mapping.BackupID)
+	// Build full namespace path: bucket + sub-namespace from key path
+	fullNamespace := bucket
+	if mapping.Namespace != "" {
+		fullNamespace = bucket + "/" + mapping.Namespace
+	}
+
+	snaps, err := h.client.ListSnapshots(ctx, fullNamespace, mapping.BackupID)
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
@@ -192,7 +202,7 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 
 	snap := snaps[len(snaps)-1]
 
-	data, err := h.client.Download(ctx, bucket, mapping.BackupID, snap.BackupTime, mapping.Filename)
+	data, err := h.client.Download(ctx, fullNamespace, mapping.BackupID, snap.BackupTime, mapping.Filename)
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
@@ -215,7 +225,13 @@ func (h *Handler) headObject(w http.ResponseWriter, r *http.Request, bucket, key
 	ctx := h.authContext(r)
 	mapping := h.keyMapper.S3ToPBS(key)
 
-	snaps, err := h.client.ListSnapshots(ctx, bucket, mapping.BackupID)
+	// Build full namespace path: bucket + sub-namespace from key path
+	fullNamespace := bucket
+	if mapping.Namespace != "" {
+		fullNamespace = bucket + "/" + mapping.Namespace
+	}
+
+	snaps, err := h.client.ListSnapshots(ctx, fullNamespace, mapping.BackupID)
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
@@ -235,7 +251,13 @@ func (h *Handler) deleteObject(w http.ResponseWriter, r *http.Request, bucket, k
 	ctx := h.authContext(r)
 	mapping := h.keyMapper.S3ToPBS(key)
 
-	snaps, err := h.client.ListSnapshots(ctx, bucket, mapping.BackupID)
+	// Build full namespace path: bucket + sub-namespace from key path
+	fullNamespace := bucket
+	if mapping.Namespace != "" {
+		fullNamespace = bucket + "/" + mapping.Namespace
+	}
+
+	snaps, err := h.client.ListSnapshots(ctx, fullNamespace, mapping.BackupID)
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
@@ -246,7 +268,7 @@ func (h *Handler) deleteObject(w http.ResponseWriter, r *http.Request, bucket, k
 	}
 
 	snap := snaps[len(snaps)-1]
-	if err := h.client.DeleteSnapshot(ctx, bucket, mapping.BackupID, snap.BackupTime); err != nil {
+	if err := h.client.DeleteSnapshot(ctx, fullNamespace, mapping.BackupID, snap.BackupTime); err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
 	}
@@ -267,7 +289,7 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 
 	objects := make([]s3.S3Object, 0, len(groups))
 	for _, group := range groups {
-		s3key := h.keyMapper.PBSToS3(group.BackupID)
+		s3key := h.keyMapper.PBSToS3(bucket, group.BackupID)
 		if s3key == "" {
 			continue
 		}
@@ -308,10 +330,8 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 			}
 
 			relPath := ns.NS[len(bucket)+1:]
+			// Only process direct sub-namespaces (single level), not deeply nested ones
 			if strings.Contains(relPath, "/") {
-				continue
-			}
-			if prefix != "" && !strings.HasPrefix(relPath+"/", prefix) && !strings.HasPrefix(prefix, relPath+"/") {
 				continue
 			}
 
@@ -320,15 +340,16 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 				continue
 			}
 			for _, group := range subGroups {
-				s3key := h.keyMapper.PBSToS3(group.BackupID)
-				if s3key == "" {
+				fullKey := h.keyMapper.PBSToS3(ns.NS, group.BackupID)
+				if fullKey == "" {
 					continue
 				}
-				fullKey := relPath + "/" + s3key
-				if prefix != "" && !strings.HasPrefix(fullKey, prefix) {
+				// Strip bucket prefix to get key relative to bucket
+				s3key := strings.TrimPrefix(fullKey, bucket+"/")
+				if prefix != "" && !strings.HasPrefix(s3key, prefix) {
 					continue
 				}
-				if marker != "" && fullKey <= marker {
+				if marker != "" && s3key <= marker {
 					continue
 				}
 
@@ -344,7 +365,7 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 				}
 
 				objects = append(objects, s3.S3Object{
-					Key:          fullKey,
+					Key:          s3key,
 					Size:         size,
 					LastModified: time.Unix(snap.BackupTime, 0),
 				})

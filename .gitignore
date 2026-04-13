@@ -1,1 +1,4 @@
 /pbs-s3gateway
+/pxar-local
+.env
+*.sql

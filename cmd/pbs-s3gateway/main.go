@@ -83,7 +83,7 @@ func main() {
 
 	km := keymapper.NewKeyMapper()
 	client := pbs.NewClient(config)
-	uploader := pbs.NewUploader(config, *insecureTLS)
+	uploader := pbs.NewUploader(config, client, *insecureTLS)
 
 	handler := gateway.NewHandler(km, client, uploader, enc, creds)
 

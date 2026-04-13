@@ -44,13 +44,8 @@ func LoadStore(path string) (*Store, error) {
 }
 
 // TokenFromRequest extracts an S3 auth token from the HTTP request
-// and returns the PBS token to use. Returns ("", false) if no S3
-// credentials are present (caller should fall back to static token).
+// and returns the PBS token to use.
 func (s *Store) TokenFromRequest(r *http.Request) (string, bool) {
-	if s == nil || len(s.creds) == 0 {
-		return "", false
-	}
-
 	header := r.Header.Get("Authorization")
 	if header == "" {
 		// Try query string auth
@@ -74,6 +69,9 @@ func (s *Store) TokenFromRequest(r *http.Request) (string, bool) {
 }
 
 func (s *Store) extractSigV4(header string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
 	// AWS4-HMAC-SHA256 Credential=ACCESSKEYID/20240115/us-east-1/s3/aws4_request, ...
 	for part := range strings.SplitSeq(header, " ") {
 		if after, ok := strings.CutPrefix(part, "Credential="); ok {
@@ -89,6 +87,9 @@ func (s *Store) extractSigV4(header string) (string, bool) {
 }
 
 func (s *Store) extractSigV2(header string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
 	// AWS ACCESSKEYID:signature
 	parts := strings.SplitN(strings.TrimPrefix(header, "AWS "), ":", 2)
 	if len(parts) >= 1 {
@@ -106,19 +107,30 @@ func (s *Store) extractBasic(header string) (string, bool) {
 	if len(pair) != 2 {
 		return "", false
 	}
-	token, ok := s.lookup(pair[0])
-	if !ok {
-		return "", false
+
+	// If a store exists, we MUST verify the secret against it.
+	// This prevents unauthorized access when some keys are restricted.
+	if s != nil {
+		token, ok := s.lookup(pair[0])
+		if ok {
+			// Verify the secret matches what we have in the store
+			expected := pair[0] + ":" + pair[1]
+			if token == expected {
+				return token, true
+			}
+			return "", false
+		}
 	}
-	// Verify the secret matches
-	expected := pair[0] + ":" + pair[1]
-	if token != expected {
-		return "", false
-	}
-	return token, true
+
+	// If no store is configured, or key is not in store, we allow "blind" passthrough
+	// for Basic Auth because it carries the secret in the clear.
+	return pair[0] + ":" + pair[1], true
 }
 
 func (s *Store) lookup(accessKey string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
 	token, ok := s.creds[accessKey]
 	return token, ok
 }

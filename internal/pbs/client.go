@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // Client implements PBS REST management API operations.
@@ -24,9 +25,14 @@ func NewClient(config Config) *Client {
 	if config.AuthToken != "" {
 		authHeader = "PBSAPIToken " + config.AuthToken
 	}
+
+	// Normalize base URL: remove trailing slashes and /api2/json if present
+	base := strings.TrimSuffix(config.BaseURL, "/")
+	base = strings.TrimSuffix(base, "/api2/json")
+
 	return &Client{
-		baseURL:    config.BaseURL + "/api2/json/admin/datastore/" + config.Datastore,
-		baseHost:   config.BaseURL,
+		baseURL:    base + "/api2/json/admin/datastore/" + config.Datastore,
+		baseHost:   base,
 		authHeader: authHeader,
 		client:     &http.Client{},
 	}
@@ -62,9 +68,27 @@ func (c *Client) doRequest(ctx context.Context, method, path string, params url.
 	return c.client.Do(req)
 }
 
+// CreateNamespace creates a new namespace in the datastore.
+func (c *Client) CreateNamespace(ctx context.Context, ns string) error {
+	params := url.Values{
+		"name": {ns},
+	}
+	resp, err := c.doRequest(ctx, http.MethodPost, "/namespace", params)
+	if err != nil {
+		return fmt.Errorf("create namespace: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("create namespace: HTTP %d: %s", resp.StatusCode, body)
+	}
+	return nil
+}
+
 // ListNamespaces lists all namespaces in the datastore.
 func (c *Client) ListNamespaces(ctx context.Context) ([]Namespace, error) {
-	resp, err := c.doRequest(ctx, http.MethodGet, "/namespaces", nil)
+	resp, err := c.doRequest(ctx, http.MethodGet, "/namespace", nil)
 	if err != nil {
 		return nil, fmt.Errorf("list namespaces: %w", err)
 	}

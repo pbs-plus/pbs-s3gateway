@@ -1,0 +1,32 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: password
+      MARIADB_DATABASE: testdb
+      MARIADB_USER: testuser
+      MARIADB_PASSWORD: password
+    volumes:
+      - ./test-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+
+  s3gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    env_file:
+      - ../.env
+    environment:
+      PBS_URL: https://phoenix-pbs.sgl.com:8007
+      PBS_DATASTORE: phoenix
+      # To test Verified Passthrough, uncomment the next line and the volumes section below
+      # CREDENTIALS_FILE: /etc/pbs-s3gateway/credentials.json
+    # volumes:
+    #   - ./test-credentials.json:/etc/pbs-s3gateway/credentials.json:ro
+    depends_on:
+      - mariadb
+    restart: unless-stopped

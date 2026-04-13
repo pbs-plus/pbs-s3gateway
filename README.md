@@ -108,7 +108,10 @@ The gateway supports two auth modes:
 pbs-s3gateway --pbs-token "root@pam!s3gateway:secret"
 ```
 
-**Credential passthrough** — S3 Access Key ID and Secret are mapped to PBS credentials. Each S3 client authenticates with its own credentials, and the gateway translates them into PBS API tokens.
+**Credential passthrough** — S3 credentials are used to authenticate with PBS. There are two modes:
+
+1.  **Blind Passthrough (Basic Auth)**: If the S3 client uses HTTP Basic Auth (e.g., `http://id:secret@localhost:8080`), the gateway directly maps the S3 Access Key ID and Secret Access Key to the PBS Token ID and Secret. This requires no server-side configuration.
+2.  **Verified Passthrough (JSON Mapping)**: If a `credentials.json` file is provided, the gateway maps S3 Access Key IDs to PBS tokens. This is **required** for AWS Signature V4 and V2 because those methods do not send the secret in the clear, so the gateway must store it to verify the request.
 
 Supported S3 auth methods: AWS Signature V4, AWS Signature V2, HTTP Basic Auth, query string auth.
 
@@ -211,6 +214,44 @@ spec:
     accessKeyId: "root@pam!s3gateway"
     secretAccessKey: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
+
+### Local Development & Testing
+
+For local testing, a Docker Compose setup is provided that includes the `pbs-s3gateway` and a `mariadb` instance pre-populated with sample data.
+
+1.  **Prepare Environment**: Copy `.env.test.example` to `.env` and fill in your Proxmox Backup Server credentials.
+    ```bash
+    cp .env.test.example .env
+    # Edit .env with your PBS_URL, PBS_DATASTORE, and PBS_TOKEN
+    ```
+
+2.  **Start Services**:
+    ```bash
+    docker compose -f deploy/docker-compose.test.yml up --build
+    ```
+
+    This will:
+    - Build the gateway from the local source.
+    - Start MariaDB on port `3306` with a `testdb` database and sample `users` table.
+    - Start the gateway on port `8080`.
+
+3.  **Test Connectivity**:
+    The gateway is configured to use `deploy/test-credentials.json` for authentication:
+    - **Access Key**: `test-access-key`
+    - **Secret Key**: `test-secret-key`
+
+    Example using `aws-cli`:
+    ```bash
+    export AWS_ACCESS_KEY_ID=test-access-key
+    export AWS_SECRET_ACCESS_KEY=test-secret-key
+    
+    # List buckets (PBS namespaces)
+    aws --endpoint-url http://localhost:8080 s3 ls
+    
+    # Upload a file
+    echo "hello pbs" > test.txt
+    aws --endpoint-url http://localhost:8080 s3 cp test.txt s3://my-bucket/test.txt
+    ```
 
 ## Project Structure
 

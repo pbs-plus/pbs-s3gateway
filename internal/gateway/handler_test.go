@@ -109,7 +109,7 @@ func newMockPBSServer(t *testing.T) *mockPBSServer {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/api2/json/admin/datastore/teststore/namespaces", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api2/json/admin/datastore/teststore/namespace", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "PBSAPIToken "+m.token {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
