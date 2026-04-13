@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -207,7 +208,7 @@ func (u *Uploader) UploadBlobWithMetadata(ctx context.Context, ns, backupID, fil
 	}
 	if err := u.uploadMetadata(ctx, session, uploadName, meta); err != nil {
 		// Log but don't fail - metadata is optional
-		// session.Finish(ctx) will be called below
+		log.Printf("upload metadata %s.s3meta: %v", uploadName, err)
 	}
 
 	if _, err := session.Finish(ctx); err != nil {
@@ -258,6 +259,7 @@ func (u *Uploader) UploadArchive(ctx context.Context, ns, backupID, filename str
 	}
 	if err := u.uploadMetadata(ctx, session, archiveName, meta); err != nil {
 		// Log but don't fail - metadata is optional
+		log.Printf("upload metadata %s.s3meta: %v", archiveName, err)
 	}
 
 	if _, err := session.Finish(ctx); err != nil {
@@ -268,13 +270,15 @@ func (u *Uploader) UploadArchive(ctx context.Context, ns, backupID, filename str
 }
 
 // uploadMetadata creates and uploads a metadata sidecar file.
+// Metadata files are uploaded as blobs with .blob extension for PBS compatibility.
 func (u *Uploader) uploadMetadata(ctx context.Context, session backupproxy.BackupSession, filename string, meta FileMetadata) error {
 	metaData, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	metaName := filename + metaSuffix
+	// PBS blob files need .blob extension
+	metaName := filename + metaSuffix + ".blob"
 	if err := session.UploadBlob(ctx, metaName, metaData); err != nil {
 		return fmt.Errorf("upload metadata: %w", err)
 	}
