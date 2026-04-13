@@ -1,10 +1,12 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -88,6 +90,64 @@ func (h *Handler) authContext(r *http.Request) context.Context {
 	return r.Context()
 }
 
+// isAwsChunked checks if request uses AWS SigV4 chunked encoding
+func isAwsChunked(r *http.Request) bool {
+	contentEncoding := r.Header.Get("Content-Encoding")
+	return strings.Contains(contentEncoding, "aws-chunked") ||
+		r.Header.Get("X-Amz-Content-Sha256") == "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
+}
+
+// decodeAwsChunked strips AWS chunk signatures and returns clean data
+// Format: hex(size) + ";chunk-signature=" + signature + "\r\n" + data + "\r\n"
+func decodeAwsChunked(data []byte) ([]byte, error) {
+	var result bytes.Buffer
+
+	for len(data) > 0 {
+		// Find the end of chunk header
+		idx := bytes.Index(data, []byte("\r\n"))
+		if idx == -1 {
+			break
+		}
+
+		// Parse chunk header: "10000;chunk-signature=..."
+		header := string(data[:idx])
+		parts := strings.Split(header, ";")
+		if len(parts) < 1 {
+			return nil, fmt.Errorf("invalid chunk header: %s", header)
+		}
+
+		// Get chunk size from hex
+		chunkSize, err := strconv.ParseInt(parts[0], 16, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid chunk size %q: %w", parts[0], err)
+		}
+
+		// Skip past the \r\n
+		data = data[idx+2:]
+
+		// Copy chunk data
+		if chunkSize > 0 {
+			if int64(len(data)) < chunkSize {
+				return nil, fmt.Errorf("incomplete chunk: need %d bytes, have %d", chunkSize, len(data))
+			}
+			result.Write(data[:chunkSize])
+			data = data[chunkSize:]
+		}
+
+		// Skip trailing \r\n
+		if len(data) >= 2 && data[0] == '\r' && data[1] == '\n' {
+			data = data[2:]
+		}
+
+		// Zero-size chunk = end
+		if chunkSize == 0 {
+			break
+		}
+	}
+
+	return result.Bytes(), nil
+}
+
 // ServeHTTP routes S3 requests to the appropriate handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	bucket, key := splitPath(r.URL.Path)
@@ -152,6 +212,17 @@ func (h *Handler) putObject(w http.ResponseWriter, r *http.Request, bucket, key 
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
+	}
+
+	// Decode AWS SigV4 chunked uploads if present
+	if isAwsChunked(r) {
+		decodedData, err := decodeAwsChunked(data)
+		if err != nil {
+			log.Printf("AWS chunked decode error for %s/%s: %v", bucket, key, err)
+			writeS3Error(w, "InvalidRequest", "failed to decode chunked upload: "+err.Error(), key, http.StatusBadRequest)
+			return
+		}
+		data = decodedData
 	}
 
 	encryptedData, err := h.encryptor.Encrypt(data)

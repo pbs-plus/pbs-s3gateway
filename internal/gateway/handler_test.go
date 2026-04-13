@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -671,5 +673,101 @@ func TestSplitPath(t *testing.T) {
 		if b != tt.bucket || k != tt.key {
 			t.Errorf("splitPath(%q) = (%q, %q), want (%q, %q)", tt.path, b, k, tt.bucket, tt.key)
 		}
+	}
+}
+
+func TestDecodeAwsChunked(t *testing.T) {
+	// Build AWS chunked data: hex(size) + ";chunk-signature=" + sig + "\r\n" + data + "\r\n"
+	actualData := []byte("hello world test data")
+	chunkSig := "2b2c2e2ed0622532ccaae72372adb44d1bb7040392a159c5d1f9af29c73f1c8f"
+
+	// Single chunk
+	chunkedData := fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n0;chunk-signature=final\r\n\r\n",
+		len(actualData), chunkSig, actualData)
+
+	decoded, err := decodeAwsChunked([]byte(chunkedData))
+	if err != nil {
+		t.Fatalf("decodeAwsChunked failed: %v", err)
+	}
+
+	if !bytes.Equal(decoded, actualData) {
+		t.Errorf("decoded data mismatch: got %q, want %q", decoded, actualData)
+	}
+
+	// Multiple chunks
+	chunk1 := []byte("hello ")
+	chunk2 := []byte("world")
+	multiChunked := fmt.Sprintf("%x;chunk-signature=sig1\r\n%s\r\n%x;chunk-signature=sig2\r\n%s\r\n0;chunk-signature=final\r\n\r\n",
+		len(chunk1), chunk1, len(chunk2), chunk2)
+
+	decoded2, err := decodeAwsChunked([]byte(multiChunked))
+	if err != nil {
+		t.Fatalf("decodeAwsChunked multi failed: %v", err)
+	}
+
+	expected := append(chunk1, chunk2...)
+	if !bytes.Equal(decoded2, expected) {
+		t.Errorf("multi-chunk decoded mismatch: got %q, want %q", decoded2, expected)
+	}
+}
+
+func TestIsAwsChunked(t *testing.T) {
+	// Test Content-Encoding header
+	req1, _ := http.NewRequest("PUT", "/bucket/key", nil)
+	req1.Header.Set("Content-Encoding", "aws-chunked")
+	if !isAwsChunked(req1) {
+		t.Error("should detect aws-chunked from Content-Encoding")
+	}
+
+	// Test x-amz-content-sha256 header
+	req2, _ := http.NewRequest("PUT", "/bucket/key", nil)
+	req2.Header.Set("X-Amz-Content-Sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+	if !isAwsChunked(req2) {
+		t.Error("should detect streaming payload from x-amz-content-sha256")
+	}
+
+	// Test not chunked
+	req3, _ := http.NewRequest("PUT", "/bucket/key", nil)
+	if isAwsChunked(req3) {
+		t.Error("should not detect as chunked without headers")
+	}
+}
+
+func TestGatewayAwsChunkedUpload(t *testing.T) {
+	gw := newTestGateway(t)
+
+	actualData := []byte("test data for chunked upload")
+	chunkSig := "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234"
+
+	// Build AWS chunked request body
+	chunkedBody := fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n0;chunk-signature=final\r\n\r\n",
+		len(actualData), chunkSig, actualData)
+
+	req, _ := http.NewRequest(http.MethodPut, gw.server.URL+"/mybucket/chunked.txt", strings.NewReader(chunkedBody))
+	req.Header.Set("Content-Encoding", "aws-chunked")
+	req.Header.Set("X-Amz-Content-Sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+	req.Header.Set("X-Amz-Decoded-Content-Length", strconv.Itoa(len(actualData)))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT chunked: status %d", resp.StatusCode)
+	}
+
+	// Verify the data was stored correctly (not the chunked metadata)
+	resp, err = http.Get(gw.server.URL + "/mybucket/chunked.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	got, _ := io.ReadAll(resp.Body)
+	if !bytes.Equal(got, actualData) {
+		t.Errorf("chunked upload data mismatch: got %q (%d bytes), want %q (%d bytes)",
+			got, len(got), actualData, len(actualData))
 	}
 }
