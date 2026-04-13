@@ -7,15 +7,21 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Store maps S3 access key IDs to PBS tokens.
-// If no store is configured, the gateway falls back to a static PBS token.
+// It automatically reloads when the credentials file changes.
 type Store struct {
-	creds map[string]string // accessKeyId → PBSAPIToken value (e.g., "root@pam!token:secret")
+	mu      sync.RWMutex
+	creds   map[string]string // accessKeyId → PBSAPIToken value (e.g., "root@pam!token:secret")
+	path    string
+	lastMod time.Time
 }
 
-// LoadStore reads a credentials file. Format: JSON object mapping
+// LoadStore reads a credentials file and returns a Store that automatically
+// reloads when the file changes. Format: JSON object mapping
 // accessKeyId → secretAccessKey. The PBS token is formed as
 // "accessKeyId:secretAccessKey".
 //
@@ -25,14 +31,39 @@ type Store struct {
 //	  "root@pam!s3gateway": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 //	}
 func LoadStore(path string) (*Store, error) {
-	data, err := os.ReadFile(path)
+	s := &Store{path: path}
+	if err := s.load(); err != nil {
+		return nil, err
+	}
+	// Start background reloader
+	go s.reloader()
+	return s, nil
+}
+
+// load reads the credentials file and updates the store
+func (s *Store) load() error {
+	info, err := os.Stat(s.path)
 	if err != nil {
-		return nil, fmt.Errorf("read credentials: %w", err)
+		return fmt.Errorf("stat credentials: %w", err)
+	}
+
+	// Check if file has been modified
+	s.mu.RLock()
+	lastMod := s.lastMod
+	s.mu.RUnlock()
+
+	if info.ModTime().Equal(lastMod) {
+		return nil // No change
+	}
+
+	data, err := os.ReadFile(s.path)
+	if err != nil {
+		return fmt.Errorf("read credentials: %w", err)
 	}
 
 	var raw map[string]string
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("parse credentials: %w", err)
+		return fmt.Errorf("parse credentials: %w", err)
 	}
 
 	creds := make(map[string]string, len(raw))
@@ -40,7 +71,25 @@ func LoadStore(path string) (*Store, error) {
 		creds[accessKey] = accessKey + ":" + secret
 	}
 
-	return &Store{creds: creds}, nil
+	s.mu.Lock()
+	s.creds = creds
+	s.lastMod = info.ModTime()
+	s.mu.Unlock()
+
+	return nil
+}
+
+// reloader periodically checks for file changes
+func (s *Store) reloader() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if err := s.load(); err != nil {
+			// Log error but continue running
+			fmt.Fprintf(os.Stderr, "Failed to reload credentials: %v\n", err)
+		}
+	}
 }
 
 // TokenFromRequest extracts an S3 auth token from the HTTP request
@@ -131,6 +180,8 @@ func (s *Store) lookup(accessKey string) (string, bool) {
 	if s == nil {
 		return "", false
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	token, ok := s.creds[accessKey]
 	return token, ok
 }

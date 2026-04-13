@@ -159,3 +159,53 @@ func TestLoadStoreInvalidJSON(t *testing.T) {
 		t.Error("expected error for invalid JSON")
 	}
 }
+
+func TestStoreReload(t *testing.T) {
+	// Create initial credentials file
+	creds := map[string]string{"key1": "secret1"}
+	data, _ := json.Marshal(creds)
+
+	f, err := os.CreateTemp("", "creds-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.Write(data)
+	f.Close()
+
+	// Load store
+	s, err := LoadStore(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify initial credentials
+	token, ok := s.lookup("key1")
+	if !ok || token != "key1:secret1" {
+		t.Fatalf("initial creds wrong: got %q", token)
+	}
+
+	// Update file with new credentials
+	newCreds := map[string]string{"key2": "secret2"}
+	newData, _ := json.Marshal(newCreds)
+	if err := os.WriteFile(f.Name(), newData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force reload by calling load directly
+	if err := s.load(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify new credentials loaded
+	token, ok = s.lookup("key2")
+	if !ok || token != "key2:secret2" {
+		t.Errorf("reloaded creds wrong: got %q, want %q", token, "key2:secret2")
+	}
+
+	// Verify old credentials gone
+	_, ok = s.lookup("key1")
+	if ok {
+		t.Error("old key1 should be gone after reload")
+	}
+}
