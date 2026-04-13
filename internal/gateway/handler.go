@@ -252,16 +252,9 @@ func (h *Handler) putObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		filename = "data"
 	}
 
-	// For chunked archive uploads, we use .didx format
-	// PBS will store the file as chunked data with a dynamic index for deduplication
-	// Note: This creates chunked storage, NOT a pxar filesystem archive
-	// For true pxar archives, you would need to wrap data in pxar format before uploading
-	if !strings.HasSuffix(filename, ".didx") {
-		filename = filename + ".didx"
-	}
-
 	// Use the new Upload method with auto-detection
 	// Pass the encrypted data size for threshold checking
+	// The uploader will automatically add .didx extension for large files
 	encryptedSize := int64(len(encryptedData))
 	backupTime, err := h.uploader.Upload(
 		h.authContext(r),
@@ -310,11 +303,13 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		baseFilename = key[idx+1:]
 	}
 
-	// Generate possible filenames to look for (both old and new formats)
-	// Old format: "data.blob"
-	// New format: "filename.didx" (chunked storage with dynamic index)
+	// Generate possible filenames to look for
+	// Format depends on file size at upload time:
+	// - Small files (< 4MB): "filename.blob"
+	// - Large files (>= 4MB): "filename.didx" (chunked storage with dynamic index)
 	candidates := []string{
 		"data.blob",
+		baseFilename + ".blob",
 		baseFilename + ".didx",
 	}
 

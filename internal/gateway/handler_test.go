@@ -94,11 +94,24 @@ func (m *mockUploader) Upload(_ context.Context, ns, backupID, filename string, 
 		return 0, err
 	}
 
-	// Determine filename - use provided filename or fall back to default
-	// The handler now appends .pxar.didx for chunked uploads, so we use that directly
+	// Determine filename with appropriate extension based on size
+	// Small files (< 4MB): .blob, Large files (>= 4MB): .didx
 	uploadName := filename
 	if uploadName == "" {
 		uploadName = "data.blob"
+	} else {
+		// Add extension based on size
+		if size < 4*1024*1024 {
+			// Small file - use .blob
+			if !strings.HasSuffix(uploadName, ".blob") && !strings.HasSuffix(uploadName, ".didx") {
+				uploadName = uploadName + ".blob"
+			}
+		} else {
+			// Large file - use .didx
+			if !strings.HasSuffix(uploadName, ".didx") {
+				uploadName = uploadName + ".didx"
+			}
+		}
 	}
 
 	m.pbs.addSnapshot(ns, backupID, backupTime, map[string][]byte{
@@ -558,13 +571,17 @@ func TestGatewayEncryptionRoundTrip(t *testing.T) {
 	}
 
 	// Verify stored data is NOT plaintext (it's encrypted then wrapped in a blob)
-	// The file is now stored with the S3 key name + .didx extension
+	// Small files (< 4MB) use .blob extension
 	gw.pbs.mu.Lock()
 	nsData := gw.pbs.snapshots["mybucket"]
 	for _, times := range nsData {
 		for _, snap := range times {
-			// Check for the file with the new naming convention (secret.txt.didx)
-			stored := snap.files["secret.txt.didx"]
+			// Check for the file - small files use .blob extension
+			stored := snap.files["secret.txt.blob"]
+			if stored == nil {
+				// Fallback to old naming
+				stored = snap.files["data.blob"]
+			}
 			// Decode the blob wrapper to get the inner encrypted data
 			innerData, err := datastore.DecodeBlob(stored)
 			if err != nil {
@@ -602,14 +619,18 @@ func TestGatewayPassthroughNoKey(t *testing.T) {
 	resp.Body.Close()
 
 	// Stored data should be plaintext (wrapped in a blob)
-	// The file is now stored with the S3 key name + .didx extension
+	// Small files (< 4MB) use .blob extension
 	gw.pbs.mu.Lock()
 	nsData := gw.pbs.snapshots["mybucket"]
 	found := false
 	for _, times := range nsData {
 		for _, snap := range times {
-			// Check for the file with the new naming convention (plain.txt.didx)
-			stored := snap.files["plain.txt.didx"]
+			// Check for the file - small files use .blob extension
+			stored := snap.files["plain.txt.blob"]
+			if stored == nil {
+				// Fallback to old naming
+				stored = snap.files["data.blob"]
+			}
 			// Decode the blob wrapper to get the inner plaintext data
 			innerData, err := datastore.DecodeBlob(stored)
 			if err != nil {

@@ -162,10 +162,13 @@ func (u *Uploader) UploadBlobWithMetadata(ctx context.Context, ns, backupID, fil
 		return 0, err
 	}
 
-	// Use the actual filename instead of generic "data.blob"
+	// Use the actual filename with .blob extension
 	uploadName := filename
 	if uploadName == "" {
 		uploadName = "data.blob"
+	} else if !strings.HasSuffix(uploadName, ".blob") && !strings.HasSuffix(uploadName, ".didx") {
+		// Add .blob extension for blob uploads
+		uploadName = uploadName + ".blob"
 	}
 
 	if err := session.UploadBlob(ctx, uploadName, data); err != nil {
@@ -198,17 +201,19 @@ func (u *Uploader) UploadBlobWithMetadata(ctx context.Context, ns, backupID, fil
 //   - Resume capability for failed uploads
 //   - Proper .didx index files for PBS management
 //
-// The filename parameter determines the archive name with .didx extension included.
+// The filename parameter determines the archive name, .didx extension will be added.
 func (u *Uploader) UploadArchive(ctx context.Context, ns, backupID, filename string, backupTime int64, originalSize int64, data io.Reader) (int64, error) {
 	session, actualTime, err := u.createSession(ctx, ns, backupID, backupTime)
 	if err != nil {
 		return 0, err
 	}
 
-	// Determine archive name - must include .didx extension
+	// Determine archive name with .didx extension for chunked storage
 	archiveName := filename
 	if archiveName == "" {
 		archiveName = "data.didx"
+	} else if !strings.HasSuffix(archiveName, ".didx") {
+		archiveName = archiveName + ".didx"
 	}
 
 	// UploadArchive streams the data, chunks it using buzhash, and creates a .didx file
