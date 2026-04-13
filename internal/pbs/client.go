@@ -277,11 +277,17 @@ func (c *Client) GetOriginalSize(ctx context.Context, ns, backupID string, backu
 // DownloadChunked downloads a chunked file (.didx) using PBSReader via HTTP/2
 // backup reader protocol. Now with namespace support (pxar v0.2.1+).
 func (c *Client) DownloadChunked(ctx context.Context, ns, backupID string, backupTime int64, filename string) ([]byte, error) {
+	// Get auth token from context (for passthrough creds) or fallback to static token
+	authToken := c.authToken
+	if v, ok := ctx.Value(authCtxKey{}).(string); ok && v != "" {
+		authToken = v
+	}
+
 	// Create PBSConfig with namespace support
 	storeConfig := backupproxy.PBSConfig{
 		BaseURL:       c.baseHost + "/api2/json",
 		Datastore:     c.datastore,
-		AuthToken:     c.authToken,
+		AuthToken:     authToken,
 		Namespace:     ns, // Now supported in pxar v0.2.1+
 		SkipTLSVerify: c.insecure,
 	}
