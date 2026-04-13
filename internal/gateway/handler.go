@@ -334,20 +334,33 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		filename = snap.Files[0].Filename
 	}
 
-	data, err := h.client.Download(ctx, fullNamespace, mapping.BackupID, snap.BackupTime, filename)
-	if err != nil {
-		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
-		return
+	var data []byte
+
+	// Check if this is a chunked file (.didx)
+	if strings.HasSuffix(filename, ".didx") {
+		// Download and reassemble chunked file
+		data, err = h.client.DownloadChunked(ctx, fullNamespace, mapping.BackupID, snap.BackupTime, filename)
+		if err != nil {
+			writeS3Error(w, "InternalError", "chunked download failed: "+err.Error(), key, http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Download regular blob file
+		data, err = h.client.Download(ctx, fullNamespace, mapping.BackupID, snap.BackupTime, filename)
+		if err != nil {
+			writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
+			return
+		}
+
+		// Decode the PBS blob to extract the actual payload (strips the blob header)
+		data, err = datastore.DecodeBlob(data)
+		if err != nil {
+			writeS3Error(w, "InternalError", "blob decode failed: "+err.Error(), key, http.StatusInternalServerError)
+			return
+		}
 	}
 
-	// Decode the PBS blob to extract the actual payload (strips the blob header)
-	decodedData, err := datastore.DecodeBlob(data)
-	if err != nil {
-		writeS3Error(w, "InternalError", "blob decode failed: "+err.Error(), key, http.StatusInternalServerError)
-		return
-	}
-
-	decryptedData, err := h.encryptor.Decrypt(decodedData)
+	decryptedData, err := h.encryptor.Decrypt(data)
 	if err != nil {
 		writeS3Error(w, "InternalError", "decryption failed", key, http.StatusInternalServerError)
 		return
