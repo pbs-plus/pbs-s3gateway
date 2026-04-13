@@ -304,18 +304,14 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 	}
 
 	// PBS filenames must not contain certain characters (like colons)
-	// We need to check both original and sanitized versions
+	// Sanitize the filename for PBS storage
 	sanitizedName := sanitizePBSFilename(baseFilename)
 
-	// Generate possible filenames to look for
-	// Format depends on file size at upload time:
-	// - Small files (< 4MB): "filename.blob"
-	// - Large files (>= 4MB): "filename.didx" (chunked storage with dynamic index)
+	// All files are now stored as .didx (chunked archive format)
+	// This provides consistent chunk-level deduplication for all files
 	candidates := []string{
-		"data.blob",
-		baseFilename + ".blob",
+		"data.didx",
 		baseFilename + ".didx",
-		sanitizedName + ".blob",
 		sanitizedName + ".didx",
 	}
 
@@ -455,13 +451,11 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 			if strings.HasSuffix(f.Filename, ".s3meta") {
 				continue
 			}
-			// Get original size for chunked files (which have .didx extension)
-			if strings.HasSuffix(f.Filename, ".didx") {
-				origSize, err := h.client.GetOriginalSize(ctx, bucket, group.BackupID, snap.BackupTime, f.Filename, f.Size)
-				if err == nil && origSize > 0 {
-					size += origSize
-					continue
-				}
+			// All files are .didx - get original size from metadata
+			origSize, err := h.client.GetOriginalSize(ctx, bucket, group.BackupID, snap.BackupTime, f.Filename, f.Size)
+			if err == nil && origSize > 0 {
+				size += origSize
+				continue
 			}
 			size += f.Size
 		}
@@ -520,13 +514,11 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 					if strings.HasSuffix(f.Filename, ".s3meta") {
 						continue
 					}
-					// Get original size for chunked files (which have .didx extension)
-					if strings.HasSuffix(f.Filename, ".didx") {
-						origSize, err := h.client.GetOriginalSize(ctx, ns.NS, group.BackupID, snap.BackupTime, f.Filename, f.Size)
-						if err == nil && origSize > 0 {
-							size += origSize
-							continue
-						}
+					// All files are .didx - get original size from metadata
+					origSize, err := h.client.GetOriginalSize(ctx, ns.NS, group.BackupID, snap.BackupTime, f.Filename, f.Size)
+					if err == nil && origSize > 0 {
+						size += origSize
+						continue
 					}
 					size += f.Size
 				}

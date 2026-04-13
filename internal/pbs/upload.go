@@ -1,6 +1,7 @@
 package pbs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -126,24 +127,26 @@ func (u *Uploader) createSession(ctx context.Context, ns, backupID string, backu
 	return nil, 0, fmt.Errorf("failed to get unique backup time after 5 attempts")
 }
 
-// Upload uploads data to PBS, automatically choosing between blob and archive upload
-// based on the size threshold. For files larger than the threshold, it uses chunked
-// archive upload which produces .didx files and enables PBS deduplication.
-// The filename parameter determines the archive name (e.g., "data.pxar" produces "data.pxar.didx").
+// Upload uploads data to PBS using chunked archive format (.didx) for all files.
+// This provides consistent chunk-level deduplication and streaming for all uploads,
+// at the cost of a small 4KB index header overhead for tiny files.
+// The filename parameter determines the archive name; .didx extension will be added.
 func (u *Uploader) Upload(ctx context.Context, ns, backupID, filename string, size int64, data io.Reader) (int64, error) {
 	backupTime := time.Now().Unix()
 
-	// For small files, buffer and use blob upload for efficiency
-	if size < u.chunkThreshold && size >= 0 {
-		buf, err := io.ReadAll(data)
+	// Buffer small files to get accurate size for metadata
+	var buf []byte
+	var err error
+	if size >= 0 && size < 1024*1024 { // Only buffer if < 1MB
+		buf, err = io.ReadAll(data)
 		if err != nil {
 			return 0, fmt.Errorf("read data: %w", err)
 		}
-		return u.UploadBlobWithMetadata(ctx, ns, backupID, filename, buf, int64(len(buf)))
+		size = int64(len(buf))
+		data = bytes.NewReader(buf)
 	}
 
-	// For large files or unknown size, use streaming archive upload with retry
-	// PBS may reject if timestamp is not unique, so we retry with incremented time
+	// Use chunked archive upload for all files
 	return u.UploadArchive(ctx, ns, backupID, filename, backupTime, size, data)
 }
 
