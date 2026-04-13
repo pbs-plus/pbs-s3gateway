@@ -238,6 +238,32 @@ func (c *Client) DeleteSnapshot(ctx context.Context, ns, backupID string, backup
 	return nil
 }
 
+// GetOriginalSize returns the original data size for a file in a snapshot.
+// It first checks for a metadata sidecar file (.s3meta), and falls back to
+// the raw file size if metadata is not found.
+func (c *Client) GetOriginalSize(ctx context.Context, ns, backupID string, backupTime int64, filename string, storedSize int64) (int64, error) {
+	// Try to read metadata file
+	metaName := filename + ".s3meta"
+	metaData, err := c.Download(ctx, ns, backupID, backupTime, metaName)
+	if err != nil {
+		// Metadata not found, return stored size
+		return storedSize, nil
+	}
+
+	var meta struct {
+		OriginalSize int64 `json:"original_size"`
+	}
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		// Invalid metadata, fall back to stored size
+		return storedSize, nil
+	}
+
+	if meta.OriginalSize > 0 {
+		return meta.OriginalSize, nil
+	}
+	return storedSize, nil
+}
+
 // HealthCheck verifies PBS is reachable by calling the /api2/json/ping endpoint.
 // Expects response: {"data":{"pong":true}}
 func (c *Client) HealthCheck(ctx context.Context) error {

@@ -87,6 +87,10 @@ func main() {
 
 	handler := gateway.NewHandler(km, client, uploader, enc, creds)
 
+	// Log the chunk threshold for visibility
+	log.Printf("Upload: chunk threshold = %d bytes (files larger than this will use .didx archives)",
+		uploader.GetChunkThreshold())
+
 	mux := http.NewServeMux()
 
 	// Liveness probe - lightweight, always returns 200 if server is running

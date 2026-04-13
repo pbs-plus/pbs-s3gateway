@@ -23,9 +23,12 @@ import (
 	"github.com/pbs-plus/pxar/datastore"
 )
 
-// BlobUploader uploads data as a blob to PBS.
-type BlobUploader interface {
-	UploadBlob(ctx context.Context, ns, backupID string, data []byte) (int64, error)
+// Uploader handles uploading data to PBS with support for both blob and archive methods.
+type Uploader interface {
+	// Upload uploads data to PBS, automatically choosing between blob and archive upload
+	// based on the size threshold. For files larger than the threshold, it uses chunked
+	// archive upload which produces .didx files and enables PBS deduplication.
+	Upload(ctx context.Context, ns, backupID, filename string, size int64, data io.Reader) (int64, error)
 }
 
 // bufPool reuses byte slices for reading request/response bodies.
@@ -65,13 +68,13 @@ func formatETag(hash [sha256.Size]byte) string {
 type Handler struct {
 	keyMapper *keymapper.KeyMapper
 	client    *pbs.Client
-	uploader  BlobUploader
+	uploader  Uploader
 	encryptor *crypto.Encryptor
 	creds     *auth.Store
 }
 
 // NewHandler creates a new S3 handler.
-func NewHandler(km *keymapper.KeyMapper, client *pbs.Client, uploader BlobUploader, enc *crypto.Encryptor, creds *auth.Store) *Handler {
+func NewHandler(km *keymapper.KeyMapper, client *pbs.Client, uploader Uploader, enc *crypto.Encryptor, creds *auth.Store) *Handler {
 	return &Handler{
 		keyMapper: km,
 		client:    client,
@@ -240,7 +243,34 @@ func (h *Handler) putObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		fullNamespace = bucket + "/" + mapping.Namespace
 	}
 
-	backupTime, err := h.uploader.UploadBlob(h.authContext(r), fullNamespace, mapping.BackupID, encryptedData)
+	// Use the S3 key as the filename (last component)
+	filename := key
+	if idx := strings.LastIndex(key, "/"); idx >= 0 {
+		filename = key[idx+1:]
+	}
+	if filename == "" {
+		filename = "data"
+	}
+
+	// For chunked archive uploads, we use .didx format
+	// PBS will store the file as chunked data with a dynamic index for deduplication
+	// Note: This creates chunked storage, NOT a pxar filesystem archive
+	// For true pxar archives, you would need to wrap data in pxar format before uploading
+	if !strings.HasSuffix(filename, ".didx") {
+		filename = filename + ".didx"
+	}
+
+	// Use the new Upload method with auto-detection
+	// Pass the encrypted data size for threshold checking
+	encryptedSize := int64(len(encryptedData))
+	backupTime, err := h.uploader.Upload(
+		h.authContext(r),
+		fullNamespace,
+		mapping.BackupID,
+		filename,
+		encryptedSize,
+		bytes.NewReader(encryptedData),
+	)
 	if err != nil {
 		log.Printf("upload %s/%s: %v", bucket, key, err)
 		writeS3Error(w, "InternalError", "upload failed", key, http.StatusInternalServerError)
@@ -274,7 +304,40 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 
 	snap := snaps[len(snaps)-1]
 
-	data, err := h.client.Download(ctx, fullNamespace, mapping.BackupID, snap.BackupTime, mapping.Filename)
+	// Get the base filename from the S3 key (last path component)
+	baseFilename := key
+	if idx := strings.LastIndex(key, "/"); idx >= 0 {
+		baseFilename = key[idx+1:]
+	}
+
+	// Generate possible filenames to look for (both old and new formats)
+	// Old format: "data.blob"
+	// New format: "filename.didx" (chunked storage with dynamic index)
+	candidates := []string{
+		"data.blob",
+		baseFilename + ".didx",
+	}
+
+	// Find the matching file in the snapshot
+	filename := ""
+	for _, f := range snap.Files {
+		for _, candidate := range candidates {
+			if f.Filename == candidate {
+				filename = f.Filename
+				break
+			}
+		}
+		if filename != "" {
+			break
+		}
+	}
+
+	// Fallback to first available file if nothing matched
+	if filename == "" && len(snap.Files) > 0 {
+		filename = snap.Files[0].Filename
+	}
+
+	data, err := h.client.Download(ctx, fullNamespace, mapping.BackupID, snap.BackupTime, filename)
 	if err != nil {
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
@@ -387,6 +450,18 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 		snap := snaps[len(snaps)-1]
 		size := int64(0)
 		for _, f := range snap.Files {
+			// Skip metadata files when calculating total size
+			if strings.HasSuffix(f.Filename, ".s3meta") {
+				continue
+			}
+			// Get original size for chunked files (which have .didx extension)
+			if strings.HasSuffix(f.Filename, ".didx") {
+				origSize, err := h.client.GetOriginalSize(ctx, bucket, group.BackupID, snap.BackupTime, f.Filename, f.Size)
+				if err == nil && origSize > 0 {
+					size += origSize
+					continue
+				}
+			}
 			size += f.Size
 		}
 
@@ -440,6 +515,18 @@ func (h *Handler) listObjects(w http.ResponseWriter, r *http.Request, bucket str
 				snap := snaps[len(snaps)-1]
 				size := int64(0)
 				for _, f := range snap.Files {
+					// Skip metadata files when calculating total size
+					if strings.HasSuffix(f.Filename, ".s3meta") {
+						continue
+					}
+					// Get original size for chunked files (which have .didx extension)
+					if strings.HasSuffix(f.Filename, ".didx") {
+						origSize, err := h.client.GetOriginalSize(ctx, ns.NS, group.BackupID, snap.BackupTime, f.Filename, f.Size)
+						if err == nil && origSize > 0 {
+							size += origSize
+							continue
+						}
+					}
 					size += f.Size
 				}
 
