@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Client implements PBS REST management API operations.
@@ -30,11 +32,23 @@ func NewClient(config Config) *Client {
 	base := strings.TrimSuffix(config.BaseURL, "/")
 	base = strings.TrimSuffix(base, "/api2/json")
 
+	// Configure HTTP client with proper timeouts to prevent hanging
+	// These timeouts ensure the client fails fast instead of hanging indefinitely
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout: 5 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
+
 	return &Client{
 		baseURL:    base + "/api2/json/admin/datastore/" + config.Datastore,
 		baseHost:   base,
 		authHeader: authHeader,
-		client:     &http.Client{},
+		client:     client,
 	}
 }
 
@@ -224,22 +238,48 @@ func (c *Client) DeleteSnapshot(ctx context.Context, ns, backupID string, backup
 	return nil
 }
 
-// HealthCheck verifies PBS is reachable. With a static token it calls
-// ListNamespaces; in passthrough mode (no static token) it does an
-// unauthenticated GET to the PBS API root to confirm TCP/TLS connectivity.
+// HealthCheck verifies PBS is reachable by calling the /api2/json/ping endpoint.
+// Expects response: {"data":{"pong":true}}
 func (c *Client) HealthCheck(ctx context.Context) error {
-	if c.authHeader != "" {
-		_, err := c.ListNamespaces(ctx)
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseHost+"/api2/json/version", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseHost+"/api2/json/ping", nil)
 	if err != nil {
 		return err
 	}
+
+	// Include auth if available (required for PBS 4.x)
+	if auth := c.authForRequest(ctx); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("PBS ping failed: HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	// Verify response contains {"data":{"pong":true}}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read ping response: %w", err)
+	}
+
+	var result struct {
+		Data struct {
+			Pong bool `json:"pong"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("invalid ping response: %w", err)
+	}
+
+	if !result.Data.Pong {
+		return fmt.Errorf("unexpected ping response: pong=%v", result.Data.Pong)
+	}
+
 	return nil
 }

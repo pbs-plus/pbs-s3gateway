@@ -88,15 +88,49 @@ func main() {
 	handler := gateway.NewHandler(km, client, uploader, enc, creds)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+
+	// Liveness probe - lightweight, always returns 200 if server is running
+	mux.HandleFunc("/health/live", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
+	// Readiness probe - checks PBS connectivity
+	// IMPORTANT: Configure your Kubernetes probe with:
+	//   timeoutSeconds: 5  (must be > the 4s context timeout below)
+	mux.HandleFunc("/health/ready", func(w http.ResponseWriter, r *http.Request) {
+		// Use 4s timeout to ensure we respond before typical K8s probe timeout (default 1s)
+		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 		defer cancel()
+
 		if err := client.HealthCheck(ctx); err != nil {
-			http.Error(w, "PBS unreachable", http.StatusServiceUnavailable)
+			log.Printf("Health check failed: %v", err)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("unready"))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ready"))
 	})
+
+	// Backward compatibility: /health acts as readiness probe
+	// IMPORTANT: Configure your Kubernetes probe with:
+	//   timeoutSeconds: 5  (must be > the 4s context timeout below)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		// Use 4s timeout to ensure we respond before typical K8s probe timeout (default 1s)
+		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+		defer cancel()
+
+		if err := client.HealthCheck(ctx); err != nil {
+			log.Printf("Health check failed: %v", err)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("unhealthy"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("healthy"))
+	})
+
 	mux.Handle("/", handler)
 
 	if enc.Enabled() {
