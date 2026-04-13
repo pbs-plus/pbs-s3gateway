@@ -5,8 +5,7 @@ WORKDIR /app
 # Copy everything including the local pxar-local copy
 COPY . .
 
-# go.mod already has the replace ./pxar-local
-RUN go mod download
+RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -o pbs-s3gateway ./cmd/pbs-s3gateway
 
 # Run stage
