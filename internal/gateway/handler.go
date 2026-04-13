@@ -18,6 +18,7 @@ import (
 	"github.com/pbs-plus/pbs-s3gateway/internal/keymapper"
 	"github.com/pbs-plus/pbs-s3gateway/internal/pbs"
 	"github.com/pbs-plus/pbs-s3gateway/internal/s3"
+	"github.com/pbs-plus/pxar/datastore"
 )
 
 // BlobUploader uploads data as a blob to PBS.
@@ -208,7 +209,14 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		return
 	}
 
-	decryptedData, err := h.encryptor.Decrypt(data)
+	// Decode the PBS blob to extract the actual payload (strips the blob header)
+	decodedData, err := datastore.DecodeBlob(data)
+	if err != nil {
+		writeS3Error(w, "InternalError", "blob decode failed: "+err.Error(), key, http.StatusInternalServerError)
+		return
+	}
+
+	decryptedData, err := h.encryptor.Decrypt(decodedData)
 	if err != nil {
 		writeS3Error(w, "InternalError", "decryption failed", key, http.StatusInternalServerError)
 		return

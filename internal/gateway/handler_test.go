@@ -19,6 +19,7 @@ import (
 	"github.com/pbs-plus/pbs-s3gateway/internal/keymapper"
 	"github.com/pbs-plus/pbs-s3gateway/internal/pbs"
 	"github.com/pbs-plus/pbs-s3gateway/internal/s3"
+	"github.com/pbs-plus/pxar/datastore"
 )
 
 // testGateway sets up a full S3 gateway with a mock PBS backend.
@@ -76,8 +77,13 @@ type mockUploader struct {
 
 func (m *mockUploader) UploadBlob(_ context.Context, ns, backupID string, data []byte) (int64, error) {
 	backupTime := time.Now().Unix()
+	// Wrap the encrypted data in a PBS blob format (with header) so it can be decoded on download
+	blob, err := datastore.EncodeBlob(data)
+	if err != nil {
+		return 0, err
+	}
 	m.pbs.addSnapshot(ns, backupID, backupTime, map[string][]byte{
-		"data.blob": data,
+		"data.blob": blob.Bytes(),
 	})
 	return backupTime, nil
 }
@@ -532,13 +538,20 @@ func TestGatewayEncryptionRoundTrip(t *testing.T) {
 		t.Fatalf("PUT: status %d", resp.StatusCode)
 	}
 
-	// Verify stored data is NOT plaintext (it's encrypted)
+	// Verify stored data is NOT plaintext (it's encrypted then wrapped in a blob)
 	gw.pbs.mu.Lock()
 	nsData := gw.pbs.snapshots["mybucket"]
 	for _, times := range nsData {
 		for _, snap := range times {
 			stored := snap.files["data.blob"]
-			if string(stored) == string(data) {
+			// Decode the blob wrapper to get the inner encrypted data
+			innerData, err := datastore.DecodeBlob(stored)
+			if err != nil {
+				t.Errorf("failed to decode stored blob: %v", err)
+				continue
+			}
+			// The inner data should be encrypted, not the original plaintext
+			if string(innerData) == string(data) {
 				t.Error("stored data should be encrypted, not plaintext")
 			}
 		}
@@ -567,14 +580,19 @@ func TestGatewayPassthroughNoKey(t *testing.T) {
 	resp, _ := http.DefaultClient.Do(req)
 	resp.Body.Close()
 
-	// Stored data should be plaintext
+	// Stored data should be plaintext (wrapped in a blob)
 	gw.pbs.mu.Lock()
 	nsData := gw.pbs.snapshots["mybucket"]
 	found := false
 	for _, times := range nsData {
 		for _, snap := range times {
 			stored := snap.files["data.blob"]
-			if string(stored) == string(data) {
+			// Decode the blob wrapper to get the inner plaintext data
+			innerData, err := datastore.DecodeBlob(stored)
+			if err != nil {
+				continue
+			}
+			if string(innerData) == string(data) {
 				found = true
 			}
 		}
