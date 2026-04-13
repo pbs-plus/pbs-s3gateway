@@ -1,16 +1,6 @@
-# Build stage
-FROM golang:1.26-alpine AS builder
-WORKDIR /app
-
-# Copy everything including the local pxar-local copy
-COPY . .
-
-RUN go mod tidy
-RUN CGO_ENABLED=0 GOOS=linux go build -o pbs-s3gateway ./cmd/pbs-s3gateway
-
-# Run stage
+# Run stage - binary is pre-built by GoReleaser
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates
-COPY --from=builder /app/pbs-s3gateway /usr/local/bin/pbs-s3gateway
+COPY pbs-s3gateway /usr/local/bin/pbs-s3gateway
 EXPOSE 8080
 ENTRYPOINT ["pbs-s3gateway"]
