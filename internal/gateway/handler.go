@@ -303,6 +303,10 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		baseFilename = key[idx+1:]
 	}
 
+	// PBS filenames must not contain certain characters (like colons)
+	// We need to check both original and sanitized versions
+	sanitizedName := sanitizePBSFilename(baseFilename)
+
 	// Generate possible filenames to look for
 	// Format depends on file size at upload time:
 	// - Small files (< 4MB): "filename.blob"
@@ -311,6 +315,8 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		"data.blob",
 		baseFilename + ".blob",
 		baseFilename + ".didx",
+		sanitizedName + ".blob",
+		sanitizedName + ".didx",
 	}
 
 	// Find the matching file in the snapshot
@@ -564,4 +570,22 @@ func writeS3Error(w http.ResponseWriter, code, message, resource string, statusC
 		RequestID: "req-" + strconv.FormatInt(time.Now().UnixNano(), 10),
 	}
 	xml.NewEncoder(w).Encode(resp)
+}
+
+// sanitizePBSFilename makes a filename safe for PBS blob storage by replacing
+// invalid characters (anything not A-Z, a-z, 0-9, _, ., -) with underscore.
+func sanitizePBSFilename(filename string) string {
+	var result strings.Builder
+	for i, c := range filename {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-' {
+			result.WriteRune(c)
+		} else {
+			// Replace invalid character with underscore
+			// Don't double up underscores
+			if i == 0 || result.Len() == 0 || result.String()[result.Len()-1] != '_' {
+				result.WriteByte('_')
+			}
+		}
+	}
+	return result.String()
 }
