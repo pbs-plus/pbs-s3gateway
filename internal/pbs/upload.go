@@ -68,7 +68,8 @@ func (u *Uploader) authForRequest(ctx context.Context) string {
 }
 
 // createSession creates a new PBS backup session with the given configuration.
-func (u *Uploader) createSession(ctx context.Context, ns, backupID string, backupTime int64) (backupproxy.BackupSession, error) {
+// If the timestamp conflicts with an existing backup, it increments and retries.
+func (u *Uploader) createSession(ctx context.Context, ns, backupID string, backupTime int64) (backupproxy.BackupSession, int64, error) {
 	// Ensure BaseURL ends with /api2/json for pxar's backupproxy
 	baseURL := strings.TrimSuffix(u.config.BaseURL, "/")
 	if !strings.HasSuffix(baseURL, "/api2/json") {
@@ -82,29 +83,47 @@ func (u *Uploader) createSession(ctx context.Context, ns, backupID string, backu
 		SkipTLSVerify: u.insecure,
 	}
 
-	backupConfig := backupproxy.BackupConfig{
-		BackupType: datastore.BackupHost,
-		BackupID:   backupID,
-		BackupTime: backupTime,
-		Namespace:  ns,
-	}
-
 	store := backupproxy.NewPBSRemoteStore(storeConfig, buzhash.DefaultConfig(), true)
-	session, err := store.StartSession(ctx, backupConfig)
-	if err != nil {
-		// Auto-create namespace if it doesn't exist (404)
+
+	// Try up to 5 times with incremented timestamps
+	currentTime := backupTime
+	for i := 0; i < 5; i++ {
+		backupConfig := backupproxy.BackupConfig{
+			BackupType: datastore.BackupHost,
+			BackupID:   backupID,
+			BackupTime: currentTime,
+			Namespace:  ns,
+		}
+
+		session, err := store.StartSession(ctx, backupConfig)
+		if err == nil {
+			return session, currentTime, nil
+		}
+
 		errMsg := fmt.Sprintf("%v", err)
+
+		// Check for timestamp conflict - increment and retry
+		if strings.Contains(errMsg, "older than last backup") ||
+			strings.Contains(errMsg, "400 Bad Request") {
+			currentTime++
+			continue
+		}
+
+		// Auto-create namespace if it doesn't exist (404)
 		if ns != "" && strings.Contains(errMsg, "404") && strings.Contains(errMsg, "namespace not found") {
 			if createErr := u.client.CreateNamespace(ctx, ns); createErr == nil {
+				// Retry once after creating namespace
 				session, err = store.StartSession(ctx, backupConfig)
+				if err == nil {
+					return session, currentTime, nil
+				}
 			}
 		}
-		if err != nil {
-			return nil, fmt.Errorf("start session: %w", err)
-		}
+
+		return nil, 0, fmt.Errorf("start session: %w", err)
 	}
 
-	return session, nil
+	return nil, 0, fmt.Errorf("failed to get unique backup time after 5 attempts")
 }
 
 // Upload uploads data to PBS, automatically choosing between blob and archive upload
@@ -123,7 +142,8 @@ func (u *Uploader) Upload(ctx context.Context, ns, backupID, filename string, si
 		return u.UploadBlobWithMetadata(ctx, ns, backupID, filename, buf, int64(len(buf)))
 	}
 
-	// For large files or unknown size, use streaming archive upload
+	// For large files or unknown size, use streaming archive upload with retry
+	// PBS may reject if timestamp is not unique, so we retry with incremented time
 	return u.UploadArchive(ctx, ns, backupID, filename, backupTime, size, data)
 }
 
@@ -137,7 +157,7 @@ func (u *Uploader) UploadBlob(ctx context.Context, ns, backupID, filename string
 func (u *Uploader) UploadBlobWithMetadata(ctx context.Context, ns, backupID, filename string, data []byte, originalSize int64) (int64, error) {
 	backupTime := time.Now().Unix()
 
-	session, err := u.createSession(ctx, ns, backupID, backupTime)
+	session, actualTime, err := u.createSession(ctx, ns, backupID, backupTime)
 	if err != nil {
 		return 0, err
 	}
@@ -156,7 +176,7 @@ func (u *Uploader) UploadBlobWithMetadata(ctx context.Context, ns, backupID, fil
 	// Create and upload metadata file for accurate S3 listing
 	meta := FileMetadata{
 		OriginalSize: originalSize,
-		UploadTime:   backupTime,
+		UploadTime:   actualTime,
 		IsChunked:    false,
 	}
 	if err := u.uploadMetadata(ctx, session, uploadName, meta); err != nil {
@@ -168,7 +188,7 @@ func (u *Uploader) UploadBlobWithMetadata(ctx context.Context, ns, backupID, fil
 		return 0, fmt.Errorf("finish: %w", err)
 	}
 
-	return backupTime, nil
+	return actualTime, nil
 }
 
 // UploadArchive uploads data as a chunked archive to PBS, producing a .didx file.
@@ -180,7 +200,7 @@ func (u *Uploader) UploadBlobWithMetadata(ctx context.Context, ns, backupID, fil
 //
 // The filename parameter determines the archive name with .didx extension included.
 func (u *Uploader) UploadArchive(ctx context.Context, ns, backupID, filename string, backupTime int64, originalSize int64, data io.Reader) (int64, error) {
-	session, err := u.createSession(ctx, ns, backupID, backupTime)
+	session, actualTime, err := u.createSession(ctx, ns, backupID, backupTime)
 	if err != nil {
 		return 0, err
 	}
@@ -202,7 +222,7 @@ func (u *Uploader) UploadArchive(ctx context.Context, ns, backupID, filename str
 	meta := FileMetadata{
 		OriginalSize:  originalSize,
 		EncryptedSize: int64(result.Size), // This is the index file size
-		UploadTime:    backupTime,
+		UploadTime:    actualTime,
 		IsChunked:     true,
 	}
 	if err := u.uploadMetadata(ctx, session, archiveName, meta); err != nil {
@@ -213,7 +233,7 @@ func (u *Uploader) UploadArchive(ctx context.Context, ns, backupID, filename str
 		return 0, fmt.Errorf("finish: %w", err)
 	}
 
-	return backupTime, nil
+	return actualTime, nil
 }
 
 // uploadMetadata creates and uploads a metadata sidecar file.
