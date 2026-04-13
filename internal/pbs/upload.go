@@ -128,9 +128,8 @@ func (u *Uploader) createSession(ctx context.Context, ns, backupID string, backu
 }
 
 // Upload uploads data to PBS using chunked archive format (.didx) for all files.
-// This provides consistent chunk-level deduplication and streaming for all uploads,
-// at the cost of a small 4KB index header overhead for tiny files.
-// The filename parameter determines the archive name; .didx extension will be added.
+// This provides consistent chunk-level deduplication for all uploads.
+// Downloads use PBSReader with HTTP/2 backup reader protocol.
 func (u *Uploader) Upload(ctx context.Context, ns, backupID, filename string, size int64, data io.Reader) (int64, error) {
 	backupTime := time.Now().Unix()
 

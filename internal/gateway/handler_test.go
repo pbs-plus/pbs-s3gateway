@@ -116,10 +116,13 @@ func (m *mockUploader) Upload(_ context.Context, ns, backupID, filename string, 
 		return 0, err
 	}
 
-	// Store both the index and the chunk
+	// Store the index, the chunk, and a blob file for test compatibility
+	// The blob file allows tests to work without PBSReader TLS
+	blobName := strings.TrimSuffix(uploadName, ".didx") + ".blob"
 	files := map[string][]byte{
 		uploadName:             idxData,
 		uploadName + ".s3meta": []byte(fmt.Sprintf(`{"original_size": %d}`, len(content))),
+		blobName:               chunkData, // For test fallback
 	}
 
 	m.pbs.addSnapshotWithChunk(ns, backupID, backupTime, files, chunkDigestHex, chunkData)

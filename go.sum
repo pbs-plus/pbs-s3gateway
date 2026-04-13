@@ -1,7 +1,7 @@
 github.com/klauspost/compress v1.18.5 h1:/h1gH5Ce+VWNLSWqPzOVn6XBO+vJbCNGvjoaGBFW2IE=
 github.com/klauspost/compress v1.18.5/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
-github.com/pbs-plus/pxar v0.1.1 h1:dR83pekdlu3lCk1mbynV+wJFbKHkGwz56mYW2Qr2mxQ=
-github.com/pbs-plus/pxar v0.1.1/go.mod h1:xbowR4UZwx3VmK4Yf50iO7h5803PjYaui1BtyLkie/8=
+github.com/pbs-plus/pxar v0.2.1 h1:WGNMqy0BlrjJKsFkAZonSsPbOLoyL0/9QimOpGMwlbQ=
+github.com/pbs-plus/pxar v0.2.1/go.mod h1:xbowR4UZwx3VmK4Yf50iO7h5803PjYaui1BtyLkie/8=
 golang.org/x/net v0.53.0 h1:d+qAbo5L0orcWAr0a9JweQpjXF19LMXJE8Ey7hwOdUA=
 golang.org/x/net v0.53.0/go.mod h1:JvMuJH7rrdiCfbeHoo3fCQU24Lf5JJwT9W3sJFulfgs=
 golang.org/x/text v0.36.0 h1:JfKh3XmcRPqZPKevfXVpI1wXPTqbkE5f7JA92a55Yxg=

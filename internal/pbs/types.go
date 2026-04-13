@@ -2,9 +2,10 @@ package pbs
 
 // Config holds PBS connection configuration.
 type Config struct {
-	BaseURL   string // PBS API base URL (e.g., "https://pbs:8007")
-	Datastore string // target datastore name
-	AuthToken string // PBS API token ("TOKENID:SECRET")
+	BaseURL       string // PBS API base URL (e.g., "https://pbs:8007")
+	Datastore     string // target datastore name
+	AuthToken     string // PBS API token ("TOKENID:SECRET")
+	SkipTLSVerify bool   // skip TLS certificate verification
 }
 
 // Snapshot represents a PBS backup snapshot.

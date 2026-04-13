@@ -3,7 +3,6 @@ package pbs
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pbs-plus/pxar/backupproxy"
 	"github.com/pbs-plus/pxar/datastore"
 )
 
@@ -21,7 +21,10 @@ import (
 type Client struct {
 	baseURL    string
 	baseHost   string
-	authHeader string // default auth (static token)
+	authHeader string // default auth header "PBSAPIToken <token>"
+	authToken  string // raw auth token for PBSReader
+	datastore  string
+	insecure   bool
 	client     *http.Client
 }
 
@@ -52,6 +55,9 @@ func NewClient(config Config) *Client {
 		baseURL:    base + "/api2/json/admin/datastore/" + config.Datastore,
 		baseHost:   base,
 		authHeader: authHeader,
+		authToken:  config.AuthToken, // Raw token for PBSReader
+		datastore:  config.Datastore,
+		insecure:   config.SkipTLSVerify,
 		client:     client,
 	}
 }
@@ -268,11 +274,27 @@ func (c *Client) GetOriginalSize(ctx context.Context, ns, backupID string, backu
 	return storedSize, nil
 }
 
-// DownloadChunked downloads a chunked file (.didx) by fetching the index,
-// then downloading and reassembling the chunks.
+// DownloadChunked downloads a chunked file (.didx) using PBSReader via HTTP/2
+// backup reader protocol. Now with namespace support (pxar v0.2.1+).
 func (c *Client) DownloadChunked(ctx context.Context, ns, backupID string, backupTime int64, filename string) ([]byte, error) {
-	// First, download the .didx index file
-	didxData, err := c.Download(ctx, ns, backupID, backupTime, filename)
+	// Create PBSConfig with namespace support
+	storeConfig := backupproxy.PBSConfig{
+		BaseURL:       c.baseHost + "/api2/json",
+		Datastore:     c.datastore,
+		AuthToken:     c.authToken,
+		Namespace:     ns, // Now supported in pxar v0.2.1+
+		SkipTLSVerify: c.insecure,
+	}
+
+	// Create and connect PBSReader
+	reader := backupproxy.NewPBSReader(storeConfig, "host", backupID, backupTime)
+	if err := reader.Connect(ctx); err != nil {
+		return nil, fmt.Errorf("connect reader: %w", err)
+	}
+	defer reader.Close()
+
+	// Download the index file
+	didxData, err := reader.DownloadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("download index: %w", err)
 	}
@@ -283,17 +305,16 @@ func (c *Client) DownloadChunked(ctx context.Context, ns, backupID string, backu
 		return nil, fmt.Errorf("parse index: %w", err)
 	}
 
-	// Reassemble data from chunks
+	// Reassemble data from chunks using PBSReader
 	var result bytes.Buffer
 	for i := 0; i < idx.Count(); i++ {
 		entry := idx.Entry(i)
 		digest := entry.Digest
-		digestHex := hex.EncodeToString(digest[:])
 
-		// Download the chunk
-		chunkData, err := c.DownloadChunk(ctx, digestHex)
+		// Download the chunk using PBSReader
+		chunkData, err := reader.DownloadChunk(digest)
 		if err != nil {
-			return nil, fmt.Errorf("download chunk %d (%s): %w", i, digestHex, err)
+			return nil, fmt.Errorf("download chunk %d: %w", i, err)
 		}
 
 		// Decode the blob wrapper
@@ -306,25 +327,6 @@ func (c *Client) DownloadChunked(ctx context.Context, ns, backupID string, backu
 	}
 
 	return result.Bytes(), nil
-}
-
-// DownloadChunk downloads a single chunk from the PBS chunk store.
-func (c *Client) DownloadChunk(ctx context.Context, digest string) ([]byte, error) {
-	params := url.Values{
-		"digest": {digest},
-	}
-
-	resp, err := c.doRequest(ctx, http.MethodGet, "/chunks", params)
-	if err != nil {
-		return nil, fmt.Errorf("download chunk: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("download chunk: HTTP %d: %s", resp.StatusCode, body)
-	}
-	return io.ReadAll(resp.Body)
 }
 
 // HealthCheck verifies PBS is reachable by calling the /api2/json/ping endpoint.
