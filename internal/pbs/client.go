@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -277,6 +278,7 @@ func (c *Client) GetOriginalSize(ctx context.Context, ns, backupID string, backu
 // DownloadChunked downloads a chunked file (.didx) using PBSReader via HTTP/2
 // backup reader protocol. Uses pxar's built-in RestoreFile for chunk reassembly.
 func (c *Client) DownloadChunked(ctx context.Context, ns, backupID string, backupTime int64, filename string) ([]byte, error) {
+	log.Println("[DownloadChunked] start")
 	authToken := c.authToken
 	if v, ok := ctx.Value(authCtxKey{}).(string); ok && v != "" {
 		authToken = v
@@ -290,26 +292,32 @@ func (c *Client) DownloadChunked(ctx context.Context, ns, backupID string, backu
 		SkipTLSVerify: c.insecure,
 	}
 
+	log.Printf("[DownloadChunked] NewPBSReader host=%s backupID=%s backupTime=%d ns=%s", storeConfig.BaseURL, backupID, backupTime, ns)
 	reader := backupproxy.NewPBSReader(storeConfig, "host", backupID, backupTime)
+	log.Println("[DownloadChunked] connecting...")
 	if err := reader.Connect(ctx); err != nil {
 		return nil, fmt.Errorf("connect reader: %w", err)
 	}
 	defer reader.Close()
+	log.Println("[DownloadChunked] connected, downloading file...")
 
 	didxData, err := reader.DownloadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("download index: %w", err)
 	}
+	log.Printf("[DownloadChunked] downloaded index, size=%d, parsing...", len(didxData))
 
 	idx, err := datastore.ReadDynamicIndex(didxData)
 	if err != nil {
 		return nil, fmt.Errorf("parse index: %w", err)
 	}
+	log.Printf("[DownloadChunked] parsed index, restoring...")
 
 	var result bytes.Buffer
 	if err := reader.RestoreFile(idx, &result); err != nil {
 		return nil, fmt.Errorf("restore file: %w", err)
 	}
+	log.Printf("[DownloadChunked] restored, size=%d", result.Len())
 
 	return result.Bytes(), nil
 }

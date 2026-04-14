@@ -285,8 +285,11 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		fullNamespace = bucket + "/" + mapping.Namespace
 	}
 
+	log.Printf("[getObject] key=%s ns=%s backupID=%s", key, fullNamespace, mapping.BackupID)
+
 	snaps, err := h.client.ListSnapshots(ctx, fullNamespace, mapping.BackupID)
 	if err != nil {
+		log.Printf("[getObject] ListSnapshots error: %v", err)
 		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
 		return
 	}
@@ -334,12 +337,16 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 		filename = snap.Files[0].Filename
 	}
 
+	log.Printf("[getObject] snap files=%v candidates=%v matched=%s", snap.Files, candidates, filename)
+
 	var data []byte
 
 	// Check if this is a chunked file (.didx)
 	if strings.HasSuffix(filename, ".didx") {
 		// Try to download and reassemble chunked file using PBSReader
+		log.Printf("[getObject] calling DownloadChunked ns=%s backupID=%s backupTime=%d filename=%s", fullNamespace, mapping.BackupID, snap.BackupTime, filename)
 		data, err = h.client.DownloadChunked(ctx, fullNamespace, mapping.BackupID, snap.BackupTime, filename)
+		log.Printf("[getObject] DownloadChunked done err=%v len=%d", err, len(data))
 		if err != nil {
 			// Fall back to simple download (for tests and backward compatibility)
 			// First try downloading the .blob version if it exists
