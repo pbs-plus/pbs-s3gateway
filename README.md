@@ -49,14 +49,14 @@ S3 keys are encoded into PBS-compatible backup-ids using base64url with a `k` pr
 
 ### Upload Protocol
 
-Uploads use PBS's HTTP/2 backup protocol:
+Uploads use PBS's HTTP/2 backup protocol (via [pxar](https://github.com/pbs-plus/pxar) v0.6.1+):
 1. TLS connection to PBS
 2. HTTP/1.1 `Upgrade: proxmox-backup-protocol-v1` → 101 Switching Protocols
 3. HTTP/2 on the upgraded connection
-4. `POST /blob` with PBS-encoded blob data
+4. Chunked archive upload with dynamic index (.didx)
 5. `POST /finish` to commit the snapshot
 
-Downloads, listings, and deletes use the standard PBS REST API over HTTPS.
+Downloads use the same HTTP/2 reader protocol for chunked file restoration. Listings and deletes use the standard PBS REST API over HTTPS.
 
 ### Encryption
 
@@ -262,13 +262,14 @@ internal/
   crypto/                 AES-256-GCM encryption (sync.Pool for nonces, pre-computed cipher)
   gateway/                S3 HTTP handler, routing, namespace mapping
   keymapper/              S3 key <-> PBS backup-id encoding (cached via sync.Map)
-  pbs/                    PBS REST client + HTTP/2 upload protocol
+  pbs/                    PBS REST client + HTTP/2 backup protocol (pxar v0.6.1)
   s3/                     S3 XML response types and serialization
 ```
 
 ## Performance
 
 The hot path is optimized for minimal allocations:
+- Chunk download+decode offloaded to pxar library (`RestoreFile`)
 - `sync.Pool` for body buffers, ETag formatting, encryption nonces
 - Pre-computed AES cipher/AEAD at construction (not per-request)
 - Cached key encoding via `sync.Map`
