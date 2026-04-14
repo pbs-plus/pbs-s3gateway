@@ -2,7 +2,7 @@ module github.com/pbs-plus/pbs-s3gateway
 
 go 1.26.1
 
-require github.com/pbs-plus/pxar v0.6.6
+require github.com/pbs-plus/pxar v0.7.2
 
 require (
 	github.com/klauspost/compress v1.18.5 // indirect
