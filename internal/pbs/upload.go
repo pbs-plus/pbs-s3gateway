@@ -85,7 +85,8 @@ func (u *Uploader) createSession(ctx context.Context, ns, backupID string, backu
 		SkipTLSVerify: u.insecure,
 	}
 
-	store := backupproxy.NewPBSRemoteStore(storeConfig, buzhash.DefaultConfig(), true)
+	chunkCfg, _ := buzhash.NewConfig(4 << 20)
+	store := backupproxy.NewPBSRemoteStore(storeConfig, chunkCfg, false)
 
 	// Try up to 5 times with incremented timestamps
 	currentTime := backupTime
@@ -268,7 +269,9 @@ func (u *Uploader) UploadArchive(ctx context.Context, ns, backupID, filename str
 	if err != nil {
 		return 0, fmt.Errorf("finish: %w", err)
 	}
-	log.Printf("upload finished: backup-time=%d, files=%d", info.BackupTime, len(info.Files))
+	if info != nil {
+		log.Printf("upload finished: backup-time=%d, files=%d", info.BackupTime, len(info.Files))
+	}
 
 	return actualTime, nil
 }
