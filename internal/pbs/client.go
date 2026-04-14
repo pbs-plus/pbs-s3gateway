@@ -275,61 +275,40 @@ func (c *Client) GetOriginalSize(ctx context.Context, ns, backupID string, backu
 }
 
 // DownloadChunked downloads a chunked file (.didx) using PBSReader via HTTP/2
-// backup reader protocol. Now with namespace support (pxar v0.2.1+).
+// backup reader protocol. Uses pxar's built-in RestoreFile for chunk reassembly.
 func (c *Client) DownloadChunked(ctx context.Context, ns, backupID string, backupTime int64, filename string) ([]byte, error) {
-	// Get auth token from context (for passthrough creds) or fallback to static token
 	authToken := c.authToken
 	if v, ok := ctx.Value(authCtxKey{}).(string); ok && v != "" {
 		authToken = v
 	}
 
-	// Create PBSConfig with namespace support
 	storeConfig := backupproxy.PBSConfig{
 		BaseURL:       c.baseHost + "/api2/json",
 		Datastore:     c.datastore,
 		AuthToken:     authToken,
-		Namespace:     ns, // Now supported in pxar v0.2.1+
+		Namespace:     ns,
 		SkipTLSVerify: c.insecure,
 	}
 
-	// Create and connect PBSReader
 	reader := backupproxy.NewPBSReader(storeConfig, "host", backupID, backupTime)
 	if err := reader.Connect(ctx); err != nil {
 		return nil, fmt.Errorf("connect reader: %w", err)
 	}
 	defer reader.Close()
 
-	// Download the index file
 	didxData, err := reader.DownloadFile(filename)
 	if err != nil {
 		return nil, fmt.Errorf("download index: %w", err)
 	}
 
-	// Parse the dynamic index
 	idx, err := datastore.ReadDynamicIndex(didxData)
 	if err != nil {
 		return nil, fmt.Errorf("parse index: %w", err)
 	}
 
-	// Reassemble data from chunks using PBSReader
 	var result bytes.Buffer
-	for i := 0; i < idx.Count(); i++ {
-		entry := idx.Entry(i)
-		digest := entry.Digest
-
-		// Download the chunk using PBSReader
-		chunkData, err := reader.DownloadChunk(digest)
-		if err != nil {
-			return nil, fmt.Errorf("download chunk %d: %w", i, err)
-		}
-
-		// Decode the blob wrapper
-		decodedChunk, err := datastore.DecodeBlob(chunkData)
-		if err != nil {
-			return nil, fmt.Errorf("decode chunk %d: %w", i, err)
-		}
-
-		result.Write(decodedChunk)
+	if err := reader.RestoreFile(idx, &result); err != nil {
+		return nil, fmt.Errorf("restore file: %w", err)
 	}
 
 	return result.Bytes(), nil
