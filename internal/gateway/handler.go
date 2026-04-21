@@ -633,13 +633,14 @@ func (h *Handler) handlePost(w http.ResponseWriter, r *http.Request, bucket, key
 	query := r.URL.Query()
 
 	// Check if this is initiating a multipart upload
-	if query.Get("uploads") != "" {
+	// Note: query.Has() checks presence, query.Get() checks value
+	if query.Has("uploads") {
 		h.createMultipartUpload(w, r, bucket, key)
 		return
 	}
 
 	// Check if this is completing a multipart upload
-	if query.Get("uploadId") != "" {
+	if query.Has("uploadId") {
 		h.completeMultipartUpload(w, r, bucket, key)
 		return
 	}
