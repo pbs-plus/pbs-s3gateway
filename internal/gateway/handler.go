@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,21 +67,23 @@ func formatETag(hash [sha256.Size]byte) string {
 
 // Handler handles S3 API requests and translates them to PBS operations.
 type Handler struct {
-	keyMapper *keymapper.KeyMapper
-	client    *pbs.Client
-	uploader  Uploader
-	encryptor *crypto.Encryptor
-	creds     *auth.Store
+	keyMapper    *keymapper.KeyMapper
+	client       *pbs.Client
+	uploader     Uploader
+	encryptor    *crypto.Encryptor
+	creds        *auth.Store
+	multipartMgr *s3.Manager
 }
 
 // NewHandler creates a new S3 handler.
 func NewHandler(km *keymapper.KeyMapper, client *pbs.Client, uploader Uploader, enc *crypto.Encryptor, creds *auth.Store) *Handler {
 	return &Handler{
-		keyMapper: km,
-		client:    client,
-		uploader:  uploader,
-		encryptor: enc,
-		creds:     creds,
+		keyMapper:    km,
+		client:       client,
+		uploader:     uploader,
+		encryptor:    enc,
+		creds:        creds,
+		multipartMgr: s3.NewManager(),
 	}
 }
 
@@ -176,12 +179,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodPut:
+		// Check for multipart upload part (has partNumber and uploadId)
+		if r.URL.Query().Get("partNumber") != "" && r.URL.Query().Get("uploadId") != "" {
+			h.uploadPart(w, r, bucket, key)
+			return
+		}
 		h.putObject(w, r, bucket, key)
+	case http.MethodPost:
+		h.handlePost(w, r, bucket, key)
 	case http.MethodGet:
+		// Check for multipart uploads list or parts list
+		if r.URL.Query().Get("uploadId") != "" {
+			h.listParts(w, r, bucket, key)
+			return
+		}
+		if r.URL.Query().Get("uploads") != "" {
+			h.listMultipartUploads(w, r, bucket)
+			return
+		}
 		h.getObject(w, r, bucket, key)
 	case http.MethodHead:
 		h.headObject(w, r, bucket, key)
 	case http.MethodDelete:
+		// Check for multipart upload abort (has uploadId)
+		if r.URL.Query().Get("uploadId") != "" {
+			h.abortMultipartUpload(w, r, bucket, key)
+			return
+		}
 		h.deleteObject(w, r, bucket, key)
 	default:
 		writeS3Error(w, "InvalidRequest", "Unsupported method", r.URL.Path, http.StatusMethodNotAllowed)
@@ -321,11 +345,8 @@ func (h *Handler) getObject(w http.ResponseWriter, r *http.Request, bucket, key 
 	// Find the matching file in the snapshot
 	filename := ""
 	for _, f := range snap.Files {
-		for _, candidate := range candidates {
-			if f.Filename == candidate {
-				filename = f.Filename
-				break
-			}
+		if slices.Contains(candidates, f.Filename) {
+			filename = f.Filename
 		}
 		if filename != "" {
 			break
@@ -605,6 +626,248 @@ func writeS3Error(w http.ResponseWriter, code, message, resource string, statusC
 		RequestID: "req-" + strconv.FormatInt(time.Now().UnixNano(), 10),
 	}
 	xml.NewEncoder(w).Encode(resp)
+}
+
+// handlePost handles POST requests for multipart uploads.
+func (h *Handler) handlePost(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	query := r.URL.Query()
+
+	// Check if this is initiating a multipart upload
+	if query.Get("uploads") != "" {
+		h.createMultipartUpload(w, r, bucket, key)
+		return
+	}
+
+	// Check if this is completing a multipart upload
+	if query.Get("uploadId") != "" {
+		h.completeMultipartUpload(w, r, bucket, key)
+		return
+	}
+
+	// Not a recognized POST operation
+	writeS3Error(w, "InvalidRequest", "Unknown POST operation", key, http.StatusBadRequest)
+}
+
+// createMultipartUpload initiates a new multipart upload.
+func (h *Handler) createMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	upload, err := h.multipartMgr.CreateMultipartUpload(bucket, key)
+	if err != nil {
+		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_ = s3.WriteCreateMultipartUploadResponse(w, bucket, key, upload.UploadID)
+}
+
+// uploadPart handles uploading a single part of a multipart upload.
+func (h *Handler) uploadPart(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	query := r.URL.Query()
+	uploadID := query.Get("uploadId")
+	partNumberStr := query.Get("partNumber")
+
+	partNumber, err := strconv.Atoi(partNumberStr)
+	if err != nil || partNumber < 1 || partNumber > 10000 {
+		writeS3Error(w, "InvalidArgument", "Invalid part number", key, http.StatusBadRequest)
+		return
+	}
+
+	upload, ok := h.multipartMgr.GetMultipartUpload(uploadID)
+	if !ok {
+		writeS3Error(w, "NoSuchUpload", "The specified upload does not exist.", uploadID, http.StatusNotFound)
+		return
+	}
+
+	// Read part data (apply same decoding as regular PUT)
+	var data []byte
+	var contentLength int64
+
+	if r.ContentLength > 0 {
+		contentLength = r.ContentLength
+	} else {
+		// Try to read with a reasonable limit
+		contentLength = 5 * 1024 * 1024 * 1024 // 5GB max part size
+	}
+
+	data, err = io.ReadAll(io.LimitReader(r.Body, contentLength))
+	if err != nil {
+		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
+		return
+	}
+
+	// Decode AWS SigV4 chunked uploads if present
+	if isAwsChunked(r) {
+		decodedData, err := decodeAwsChunked(data)
+		if err != nil {
+			writeS3Error(w, "InvalidRequest", "failed to decode chunked upload: "+err.Error(), key, http.StatusBadRequest)
+			return
+		}
+		data = decodedData
+	}
+
+	// Add the part
+	etag, err := upload.AddPart(partNumber, bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("ETag", fmt.Sprintf("\"%s\"", etag))
+	w.Header().Set("x-amz-request-id", "req-"+uploadID)
+	w.WriteHeader(http.StatusOK)
+}
+
+// completeMultipartUpload completes a multipart upload and uploads to PBS using streaming.
+func (h *Handler) completeMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	uploadID := r.URL.Query().Get("uploadId")
+
+	upload, ok := h.multipartMgr.GetMultipartUpload(uploadID)
+	if !ok {
+		writeS3Error(w, "NoSuchUpload", "The specified upload does not exist.", uploadID, http.StatusNotFound)
+		return
+	}
+
+	// Parse the complete request body
+	var completeReq s3.CompleteMultipartUploadRequest
+	if err := xml.NewDecoder(r.Body).Decode(&completeReq); err != nil {
+		writeS3Error(w, "MalformedXML", err.Error(), key, http.StatusBadRequest)
+		return
+	}
+
+	// Validate that all parts exist
+	for _, cp := range completeReq.Parts {
+		if _, ok := upload.GetPart(cp.PartNumber); !ok {
+			writeS3Error(w, "InvalidPart", fmt.Sprintf("Part %d not found", cp.PartNumber), key, http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Get mapping for PBS
+	mapping := h.keyMapper.S3ToPBS(key)
+	mapping.BackupTime = time.Now().Unix()
+
+	// Build full namespace path
+	fullNamespace := bucket
+	if mapping.Namespace != "" {
+		fullNamespace = bucket + "/" + mapping.Namespace
+	}
+
+	// Get filename
+	filename := key
+	if idx := strings.LastIndex(key, "/"); idx >= 0 {
+		filename = key[idx+1:]
+	}
+	if filename == "" {
+		filename = "data"
+	}
+
+	// Create streaming multi-reader that doesn't load everything into memory
+	reader, err := upload.MultiReader()
+	if err != nil {
+		writeS3Error(w, "InternalError", err.Error(), key, http.StatusInternalServerError)
+		return
+	}
+	defer reader.Close()
+
+	// Stream through encryption using io.Pipe
+	// This avoids materializing the entire file in memory
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+
+		buf := make([]byte, 64*1024) // 64KB chunks
+		for {
+			n, err := reader.Read(buf)
+			if n > 0 {
+				encryptedChunk, encErr := h.encryptor.Encrypt(buf[:n])
+				if encErr != nil {
+					_ = pw.CloseWithError(encErr)
+					return
+				}
+				_, writeErr := pw.Write(encryptedChunk)
+				if writeErr != nil {
+					return // Reader closed
+				}
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				_ = pw.CloseWithError(err)
+				return
+			}
+		}
+	}()
+
+	// Upload to PBS - the uploader will stream from the pipe
+	backupTime, err := h.uploader.Upload(
+		h.authContext(r),
+		fullNamespace,
+		mapping.BackupID,
+		filename,
+		-1, // Unknown size with streaming
+		pr,
+	)
+	if err != nil {
+		log.Printf("complete multipart upload %s/%s: %v", bucket, key, err)
+		writeS3Error(w, "InternalError", "upload failed", key, http.StatusInternalServerError)
+		return
+	}
+
+	// Clean up multipart state
+	h.multipartMgr.RemoveMultipartUpload(uploadID)
+
+	// Compute final ETag
+	etag := upload.ComputeETag()
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.Header().Set("x-amz-request-id", "req-"+strconv.FormatInt(backupTime, 10))
+	_ = s3.WriteCompleteMultipartUploadResponse(w, bucket, key, etag)
+}
+
+// abortMultipartUpload aborts a multipart upload.
+func (h *Handler) abortMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	uploadID := r.URL.Query().Get("uploadId")
+
+	if !h.multipartMgr.AbortMultipartUpload(uploadID) {
+		writeS3Error(w, "NoSuchUpload", "The specified upload does not exist.", uploadID, http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// listParts lists the parts of a multipart upload.
+func (h *Handler) listParts(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	uploadID := r.URL.Query().Get("uploadId")
+
+	upload, ok := h.multipartMgr.GetMultipartUpload(uploadID)
+	if !ok {
+		writeS3Error(w, "NoSuchUpload", "The specified upload does not exist.", uploadID, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_ = s3.WriteListPartsResponse(w, bucket, key, uploadID, upload.ListParts())
+}
+
+// listMultipartUploads lists in-progress multipart uploads.
+func (h *Handler) listMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) {
+	uploads := h.multipartMgr.ListMultipartUploads(bucket)
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+
+	resp := s3.ListMultipartUploadsResponse{
+		Bucket:     bucket,
+		MaxUploads: 1000,
+		Uploads:    uploads,
+	}
+	enc := xml.NewEncoder(w)
+	enc.Indent("", "  ")
+	_ = enc.Encode(resp)
 }
 
 // sanitizePBSFilename makes a filename safe for PBS blob storage by replacing

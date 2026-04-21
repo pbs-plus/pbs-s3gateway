@@ -121,7 +121,7 @@ func (m *mockUploader) Upload(_ context.Context, ns, backupID, filename string, 
 	blobName := strings.TrimSuffix(uploadName, ".didx") + ".blob"
 	files := map[string][]byte{
 		uploadName:             idxData,
-		uploadName + ".s3meta": []byte(fmt.Sprintf(`{"original_size": %d}`, len(content))),
+		uploadName + ".s3meta": fmt.Appendf(nil, `{"original_size": %d}`, len(content)),
 		blobName:               chunkData, // For test fallback
 	}
 
