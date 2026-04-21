@@ -771,13 +771,14 @@ func (h *Handler) completeMultipartUpload(w http.ResponseWriter, r *http.Request
 	}
 	defer reader.Close()
 
-	// Stream through encryption using io.Pipe
+	// Stream through encryption using io.Pipe with 16KB buffer
 	// This avoids materializing the entire file in memory
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
 
-		buf := make([]byte, 64*1024) // 64KB chunks
+		// Use smaller buffer for lower memory pressure
+		buf := make([]byte, 16*1024) // 16KB chunks for better memory efficiency
 		for {
 			n, err := reader.Read(buf)
 			if n > 0 {

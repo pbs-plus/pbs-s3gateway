@@ -14,8 +14,8 @@ import (
 
 const (
 	// maxInMemoryPart is the size threshold for keeping parts in memory vs temp files.
-	// Parts smaller than this are kept in memory, larger ones are stored on disk.
-	maxInMemoryPart = 64 * 1024 * 1024 // 64MB
+	// Set to 5MB to match S3 minimum part size and minimize memory usage.
+	maxInMemoryPart = 5 * 1024 * 1024 // 5MB
 
 	// tempDir is where multipart parts are stored if they exceed maxInMemoryPart.
 	tempDir = "/tmp/pbs-s3gateway-multipart"
