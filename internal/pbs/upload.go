@@ -90,7 +90,7 @@ func (u *Uploader) createSession(ctx context.Context, ns, backupID string, backu
 
 	// Try up to 5 times with incremented timestamps
 	currentTime := backupTime
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		backupConfig := backupproxy.BackupConfig{
 			BackupType: datastore.BackupHost,
 			BackupID:   backupID,
