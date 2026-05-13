@@ -91,7 +91,7 @@ func (u *StreamingUploader) UploadStream(ctx context.Context, ns, backupID, file
 	chunker := datastore.NewStoreChunker(store, u.chunkCfg, u.compress)
 
 	// Stream through chunker - this processes chunks as they arrive
-	results, idxWriter, err := chunker.ChunkStream(data)
+	results, idxWriter, err := chunker.ChunkStream(data, nil)
 	if err != nil {
 		return 0, fmt.Errorf("chunk stream: %w", err)
 	}

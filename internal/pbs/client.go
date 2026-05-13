@@ -307,7 +307,7 @@ func (c *Client) DownloadChunked(ctx context.Context, ns, backupID string, backu
 	}
 	log.Printf("[DownloadChunked] downloaded index, size=%d, parsing...", len(didxData))
 
-	idx, err := datastore.ReadDynamicIndex(didxData)
+	idx, err := datastore.ParseDynamicIndex(didxData)
 	if err != nil {
 		return nil, fmt.Errorf("parse index: %w", err)
 	}

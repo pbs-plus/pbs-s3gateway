@@ -86,7 +86,7 @@ func (u *Uploader) createSession(ctx context.Context, ns, backupID string, backu
 	}
 
 	chunkCfg, _ := buzhash.NewConfig(4 << 20)
-	store := backupproxy.NewPBSRemoteStore(storeConfig, chunkCfg, false)
+	store := backupproxy.NewPBSStore(storeConfig, chunkCfg, false)
 
 	// Try up to 5 times with incremented timestamps
 	currentTime := backupTime
