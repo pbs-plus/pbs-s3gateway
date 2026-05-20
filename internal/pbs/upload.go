@@ -86,16 +86,18 @@ func (u *Uploader) createSession(ctx context.Context, ns, backupID string, backu
 	}
 
 	chunkCfg, _ := buzhash.NewConfig(4 << 20)
-	store := backupproxy.NewPBSStore(storeConfig, chunkCfg, false)
+	store := backupproxy.NewPBSStore(storeConfig, chunkCfg, true)
 
 	// Try up to 5 times with incremented timestamps
 	currentTime := backupTime
 	for range 5 {
 		backupConfig := backupproxy.BackupConfig{
-			BackupType: datastore.BackupHost,
-			BackupID:   backupID,
-			BackupTime: currentTime,
-			Namespace:  ns,
+			BackupType:  datastore.BackupHost,
+			BackupID:    backupID,
+			BackupTime:  currentTime,
+			Namespace:   ns,
+			ChunkConfig: chunkCfg,
+			Compress:    true,
 		}
 
 		session, err := store.StartSession(ctx, backupConfig)

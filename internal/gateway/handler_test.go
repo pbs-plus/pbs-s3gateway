@@ -89,12 +89,16 @@ func (m *mockUploader) Upload(_ context.Context, ns, backupID, filename string, 
 		return 0, err
 	}
 
-	// Wrap the data in a PBS blob format (this becomes our single chunk)
-	blob, err := datastore.EncodeBlob(content)
+	// Wrap the data in a PBS blob format using pooled buffer (zero-alloc path)
+	bp := datastore.BlobBufPool.Get().(*[]byte)
+	chunkBlob, err := datastore.EncodeBlobTo((*bp)[:0], content)
 	if err != nil {
+		datastore.PutBlobBuf(bp)
 		return 0, err
 	}
-	chunkData := blob.Bytes()
+	// Clone before returning buffer to pool since chunkBlob aliases bp
+	chunkData := bytes.Clone(chunkBlob)
+	datastore.PutBlobBuf(bp)
 
 	// Calculate chunk digest
 	chunkDigest := sha256.Sum256(chunkData)
